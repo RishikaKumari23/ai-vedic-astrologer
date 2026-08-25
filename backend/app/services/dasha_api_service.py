@@ -5,36 +5,23 @@ from datetime import datetime
 from typing import Optional, Dict, List
 
 from app.utils.logger import logger
-from app.config.settings import settings
 
 DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
 
-DASHA_LAMBDA_URL = settings.DASHA_LAMBDA_URL
-DASHA_LAMBDA_BEARER_TOKEN = settings.DASHA_LAMBDA_BEARER_TOKEN
+import os
+
+DASHA_LAMBDA_URL = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
+DASHA_LAMBDA_BEARER_TOKEN = os.environ.get("DASHA_LAMBDA_BEARER_TOKEN", "f83c6105-1731-4cd9-9d94-9543ff01bfe1") # Fallback for now to not break anything
 
 # Confirmed working value — casing matters ("Mahadasha", not "MahaDasha").
 FEATURE = "Mahadasha"
 
 
 def _parse_dt(date_str: str) -> Optional[datetime]:
-    if not date_str:
+    try:
+        return datetime.strptime(date_str, DATE_FORMAT)
+    except (ValueError, TypeError):
         return None
-    formats = [
-        "%d/%m/%Y %H:%M:%S",
-        "%d-%m-%Y %H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%d/%m/%Y",
-        "%d-%m-%Y",
-        "%Y-%m-%d",
-    ]
-    cleaned = str(date_str).strip()
-    for fmt in formats:
-        try:
-            return datetime.strptime(cleaned, fmt)
-        except (ValueError, TypeError):
-            continue
-    return None
 
 
 class DashaApiService:

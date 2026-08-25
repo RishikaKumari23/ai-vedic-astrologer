@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { API_BASE } from '../api';
 
 interface LifeDashboardProps {
   sessionId: string;
@@ -44,7 +43,7 @@ export default function LifeDashboard({ sessionId, language }: LifeDashboardProp
   const t = STRINGS[language] || STRINGS.Hinglish;
 
   useEffect(() => {
-    fetch(`${API_BASE}/session/${sessionId}/dashboard`)
+    fetch(`/api/session/${sessionId}/dashboard`)
       .then((res) => res.json())
       .then((data) => {
         if (data.available) {
@@ -53,7 +52,7 @@ export default function LifeDashboard({ sessionId, language }: LifeDashboardProp
         }
       })
       .finally(() => setLoading(false));
-  }, [sessionId, language]);
+  }, [sessionId]);
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">

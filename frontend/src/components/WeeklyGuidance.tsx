@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { API_BASE } from '../api';
-
+const API_BASE =
+  ((import.meta as ImportMeta & {
+    env?: { VITE_API_BASE?: string }
+  }).env?.VITE_API_BASE) || '/api';
+  
 interface WeeklyGuidanceProps {
   sessionId: string;
-  language: string;
 }
 
-export default function WeeklyGuidance({ sessionId, language }: WeeklyGuidanceProps) {
+export default function WeeklyGuidance({ sessionId }: WeeklyGuidanceProps) {
   const [guidance, setGuidance] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,7 +19,7 @@ export default function WeeklyGuidance({ sessionId, language }: WeeklyGuidancePr
         if (data.available) setGuidance(data.guidance);
       })
       .finally(() => setLoading(false));
-  }, [sessionId, language]);
+  }, [sessionId]);
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">

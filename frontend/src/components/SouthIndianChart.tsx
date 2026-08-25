@@ -1,5 +1,4 @@
 
-
 interface Planet {
   name: string;
   sign_name: string;
