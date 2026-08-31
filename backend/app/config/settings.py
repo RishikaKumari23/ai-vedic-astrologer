@@ -19,11 +19,13 @@ class Settings(BaseSettings):
     # OpenAI Settings (used when LLM_PROVIDER=openai)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
 
 
     # Groq Settings (used when LLM_PROVIDER=groq)
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
     # Ollama Settings (used when LLM_PROVIDER=ollama, for local development)
     OLLAMA_HOST: str = "http://localhost:11434"

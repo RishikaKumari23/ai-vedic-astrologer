@@ -28,12 +28,14 @@ class LLMService:
         # ============================================================
         self.openai_api_key = getattr(settings, "OPENAI_API_KEY", "")
         self.openai_model = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
+        self.openai_base_url = getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         # ============================================================
         # GROQ CLOUD
         # ============================================================
         self.groq_api_key = getattr(settings, "GROQ_API_KEY", "")
         self.groq_model = getattr(settings, "GROQ_MODEL", "llama-3.1-8b-instant")
+        self.groq_base_url = getattr(settings, "GROQ_BASE_URL", "https://api.groq.com/openai/v1")
         
         # ============================================================
         # LOCAL OLLAMA
@@ -79,7 +81,7 @@ class LLMService:
             # OPENAI
             # ========================================================
             if self.provider == "openai" and self.openai_api_key:
-                url = "https://api.openai.com/v1/chat/completions"
+                url = f"{self.openai_base_url}/chat/completions"
                 messages = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
@@ -109,7 +111,7 @@ class LLMService:
             # OPENAI
             # ========================================================
             if self.provider == "openai" and self.openai_api_key:
-                url = "https://api.openai.com/v1/chat/completions"
+                url = f"{self.openai_base_url}/chat/completions"
                 payload = {
                     "model": self.openai_model,
                     "messages": [{"role": "user", "content": prompt}],
@@ -142,7 +144,7 @@ class LLMService:
             # GROQ
             # ========================================================
             if self.provider == "groq" and self.groq_api_key:
-                url = "https://api.groq.com/openai/v1/chat/completions"
+                url = f"{self.groq_base_url}/chat/completions"
                 messages = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
