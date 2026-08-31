@@ -148,9 +148,27 @@ DEFAULT_SUGGESTIONS = [
 ]
 
 
-def get_instant_suggestions(topic: Optional[str], language: str = "English") -> list:
+def get_instant_suggestions(*args, **kwargs) -> list:
     """Returns instant follow-up suggestions based on the detected topic.
     No LLM call needed — responses are immediate."""
+    topic = None
+    language = "English"
+
+    # Support (topic, language), (session, topic, language), or kwargs
+    if "topic" in kwargs:
+        topic = kwargs["topic"]
+    if "language" in kwargs:
+        language = kwargs["language"]
+
+    if args:
+        if len(args) == 1:
+            topic = args[0] if isinstance(args[0], str) or args[0] is None else None
+        elif len(args) == 2:
+            topic, language = args[0], args[1]
+        elif len(args) >= 3:
+            # Called with (session, topic, language)
+            topic, language = args[1], args[2]
+
     suggestions = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS) if topic else DEFAULT_SUGGESTIONS
 
     if language == "Hinglish":
@@ -578,6 +596,8 @@ def build_reasoning_trace(
     consistency_check: Optional[dict],
     rag_sources: Optional[List[Dict[str, Any]]] = None,
     evidence_vote: Optional[Dict] = None,
+    topic_result: Optional[Any] = None,
+    **kwargs,
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
     computed elsewhere in the pipeline. Each step is {step, title, detail} —
@@ -588,6 +608,30 @@ def build_reasoning_trace(
 
     steps = []
     step_num = 1
+
+    if topic_result:
+        # Step 1: Classification
+        method_str = getattr(topic_result, "method", "router")
+        conf = getattr(topic_result, "confidence", 1.0)
+        topic_name = topic.capitalize() if topic else "General"
+        concepts = getattr(topic_result, "llm_concepts", []) or []
+        concept_str = f" Concepts: {', '.join(concepts)}" if concepts else ""
+        steps.append({
+            "step": step_num,
+            "title": "Classification",
+            "detail": f"Topic: {topic_name} — detected via {method_str} ({int(conf * 100)}% confidence).{concept_str}"
+        })
+        step_num += 1
+
+        # Step 2: Query Summary
+        summary = getattr(topic_result, "llm_summary", None)
+        if summary:
+            steps.append({
+                "step": step_num,
+                "title": "Query Summary",
+                "detail": summary
+            })
+            step_num += 1
 
     if dasha_info:
         maha = dasha_info.get("current_mahadasha", {})

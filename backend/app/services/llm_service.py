@@ -108,39 +108,6 @@ class LLMService:
                     raise Exception(f"OpenAI API error: {response.text}")
 
             # ========================================================
-            # OPENAI
-            # ========================================================
-            if self.provider == "openai" and self.openai_api_key:
-                url = f"{self.openai_base_url}/chat/completions"
-                payload = {
-                    "model": self.openai_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": temperature,
-                    "stream": True
-                }
-                headers = {
-                    "Authorization": f"Bearer {self.openai_api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                response = requests.post(url, json=payload, headers=headers, stream=True, timeout=10)
-                for line in response.iter_lines():
-                    if line:
-                        decoded = line.decode('utf-8')
-                        if decoded.startswith('data: '):
-                            data_str = decoded[6:]
-                            if data_str.strip() == '[DONE]':
-                                break
-                            try:
-                                chunk = json.loads(data_str)
-                                delta = chunk['choices'][0].get('delta', {})
-                                if 'content' in delta:
-                                    yield delta['content']
-                            except:
-                                continue
-                return
-
-            # ========================================================
             # GROQ
             # ========================================================
             if self.provider == "groq" and self.groq_api_key:
@@ -316,6 +283,71 @@ class LLMService:
     ):
 
         try:
+            # ========================================================
+            # OPENAI STREAMING
+            # ========================================================
+            if self.provider == "openai" and self.openai_api_key:
+                url = f"{self.openai_base_url}/chat/completions"
+                payload = {
+                    "model": self.openai_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                    "stream": True
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.openai_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                response = requests.post(url, json=payload, headers=headers, stream=True, timeout=30)
+                for line in response.iter_lines():
+                    if line:
+                        decoded = line.decode('utf-8')
+                        if decoded.startswith('data: '):
+                            data_str = decoded[6:]
+                            if data_str.strip() == '[DONE]':
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk['choices'][0].get('delta', {})
+                                if 'content' in delta:
+                                    yield delta['content']
+                            except Exception:
+                                continue
+                return
+
+            # ========================================================
+            # GROQ STREAMING
+            # ========================================================
+            if self.provider == "groq" and self.groq_api_key:
+                url = f"{self.groq_base_url}/chat/completions"
+                payload = {
+                    "model": self.groq_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                    "stream": True
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                response = requests.post(url, json=payload, headers=headers, stream=True, timeout=30)
+                for line in response.iter_lines():
+                    if line:
+                        decoded = line.decode('utf-8')
+                        if decoded.startswith('data: '):
+                            data_str = decoded[6:]
+                            if data_str.strip() == '[DONE]':
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk['choices'][0].get('delta', {})
+                                if 'content' in delta:
+                                    yield delta['content']
+                            except Exception:
+                                continue
+                return
 
             # ========================================================
             # OLLAMA CLOUD STREAMING
