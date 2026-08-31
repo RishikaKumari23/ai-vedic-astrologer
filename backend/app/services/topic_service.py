@@ -1,7 +1,5 @@
-# ============================================================
-# topic_service.py (updated)
-# ============================================================
-from typing import Optional, List, Dict
+
+from typing import Dict, Any, List, Optional, Set
 from app.services.kundli_service import get_house_lord
 
 # Simplified but reasonable chart-factor mapping per life topic.
@@ -20,7 +18,7 @@ TOPIC_CHART_FACTORS = {
     },
     "health": {
         "house": 1, "planets": ["Saturn", "Mars", "Moon"],
-        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari", "personality", "lagna", "ascendant", "gemstone", "dasha", "mahadasha", "antardasha", "myself", "nature", "character", "ashtakavarga", "bindus", "bindu", "transit", "transits", "kakshya", "shodhana", "sav", "nakshatra", "planet", "planets"],
+        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
         "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
@@ -104,11 +102,6 @@ EVIDENCE_WEIGHTS = {
 }
 
 
-def get_ordinal(n: int) -> str:
-    if 11 <= (n % 100) <= 13:
-        return f"{n}th"
-    return f"{n}{['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10]}"
-
 def classify_topic(message: str) -> Optional[str]:
     """Simple keyword-based topic classifier."""
     text_lower = message.lower()
@@ -119,93 +112,32 @@ def classify_topic(message: str) -> Optional[str]:
     return None
 
 
-# Pre-defined instant follow-up suggestions per topic — large pool so they feel fresh.
-# get_instant_suggestions() picks 3 at random from this pool each time.
+# Pre-defined instant follow-up suggestions per topic.
 TOPIC_SUGGESTIONS = {
     "marriage": [
         "Which gemstone should I wear to attract the right partner?",
         "When is the best time for my marriage according to my Dasha?",
-        "How is {marriage_lord} (my 7th house lord) placed in my chart?",
-        "Is Venus strong in my chart for a happy marriage?",
-        "What does my Navamsa (D9) chart say about my spouse?",
-        "Which planets in my chart are delaying my marriage?",
-        "What remedy can I do to remove obstacles in marriage?",
-        "Will I have a love marriage or an arranged marriage?",
-        "What qualities will my future spouse have according to my chart?",
-        "How is my 7th house lord's placement affecting my relationship?",
-        "Is Rahu or Ketu affecting my marriage timing?",
-        "What does my current Antardasha say about my marriage timing?",
-        "Which mantra or puja is best for early marriage?",
-        "Will my marriage be in my current {mahadasha} Mahadasha?",
-        "How does Saturn's position affect my marriage prospects?",
+        "How is my 7th house lord placed in my chart?",
     ],
     "career": [
         "Which gemstone strengthens my career planet?",
         "When will my career growth peak in the next 2 years?",
-        "Is my 10th house (ruled by {career_lord}) strong for a government job?",
-        "What does my D10 (Dasamsa) chart say about my career?",
-        "Which planet is the biggest support for my profession?",
-        "Will I get a promotion in my current Dasha?",
-        "Is this a good time to start my own business?",
-        "How is my 6th house affecting my work life?",
-        "Which field of work best suits my birth chart?",
-        "Are there any planets causing delays in my career?",
-        "Should I change my job in my current Dasha period?",
-        "What remedy can strengthen {career_lord} (my 10th house lord)?",
-        "Will I get opportunities to work abroad?",
-        "How strong is Mercury in my chart for business?",
-        "What does my current Antardasha mean for my professional life?",
+        "Is my 10th house strong for a government job?",
     ],
     "finance": [
         "Which stone or remedy can improve my financial luck?",
         "When will my income increase according to my Dasha?",
-        "How is my 11th house (ruled by {wealth_lord}) placed for gains?",
-        "Is Jupiter well-placed for wealth in my chart?",
-        "What does my 2nd house say about accumulated wealth?",
-        "Will I face any major financial loss in the coming year?",
-        "Which planet is blocking my financial growth?",
-        "Is this a good time to invest money?",
-        "How can I reduce my financial debts according to my chart?",
-        "What remedy should I do to improve my savings?",
-        "Will I receive any unexpected windfall or inheritance?",
-        "How does Rahu in my chart affect my income?",
-        "Is my current {mahadasha} Mahadasha good for financial stability?",
-        "What business or investment suits my chart the most?",
-        "Which house lord controls my overall wealth?",
+        "How is my 11th house placed for gains?",
     ],
     "health": [
         "Which gemstone or remedy improves my vitality?",
         "Which planet is affecting my health the most right now?",
         "How does my current Dasha affect my physical strength?",
-        "Which part of my body is most vulnerable according to my chart?",
-        "Is Saturn's transit affecting my energy levels?",
-        "What does my 8th house say about longevity?",
-        "Which mantra or puja strengthens my immune system?",
-        "Is there any period coming up where I need to be extra careful?",
-        "How does Rahu or Ketu placement affect my wellbeing?",
-        "How does {health_lord} control my overall health?",
-        "Is Mars weak in my chart? How does it affect my energy?",
-        "What diet or lifestyle changes does my chart suggest?",
-        "How does my current Antardasha lord influence my health?",
-        "Is the 6th house afflicted in my chart?",
-        "Which remedy is best to protect my health in this Dasha?",
     ],
     "education": [
         "Which gemstone improves concentration and memory?",
         "Is my chart strong for higher education or abroad studies?",
         "When is the best period to appear for exams?",
-        "How is Mercury placed in my chart for academic success?",
-        "What does the 5th house say about my intelligence?",
-        "Which Dasha period is best for clearing competitive exams?",
-        "Is Jupiter strong in my chart for knowledge and wisdom?",
-        "Will I get admission to a good college in my current Dasha?",
-        "What remedy can help me focus and study better?",
-        "Is Ketu affecting my concentration negatively?",
-        "What does the 4th house say about my foundational education?",
-        "Will I get a scholarship or financial aid for studies?",
-        "How is my 9th house for higher education and foreign degrees?",
-        "Which planet should I strengthen for better academic results?",
-        "Is this year good for taking on a new course or skill?",
     ],
 }
 
@@ -213,61 +145,13 @@ DEFAULT_SUGGESTIONS = [
     "Which gemstone is lucky for me?",
     "How is my current Dasha period overall?",
     "What does my Lagna (Ascendant) say about my personality?",
-    "Which planet is most dominant in my birth chart?",
-    "What are the biggest strengths in my chart?",
-    "Is there any major planetary change coming soon for me?",
-    "What is my most favourable period in the next year?",
-    "Which remedy should I follow based on my chart?",
-    "How does my Moon sign affect my emotions?",
-    "What does my Nakshatra say about my life path?",
 ]
 
 
-def get_instant_suggestions(session: dict, topic: str, language: str = "English") -> list:
-    """Returns 3 random, non-repeating instant follow-up suggestions based on
-    the detected topic. Picks from a large pool so they feel fresh every time.
+def get_instant_suggestions(topic: Optional[str], language: str = "English") -> list:
+    """Returns instant follow-up suggestions based on the detected topic.
     No LLM call needed — responses are immediate."""
-    import random
-    from app.services.kundli_service import get_house_lord
-
-    # Read ascendant from kundli_raw (the chart JSON stored by chat_service)
-    ascendant = "Unknown"
-    kundli_raw = session.get("kundli_raw")
-    if kundli_raw:
-        if isinstance(kundli_raw, str):
-            try:
-                kundli_raw = json.loads(kundli_raw)
-            except:
-                kundli_raw = {}
-        ascendant = kundli_raw.get("ascendant_sign", "Unknown")
-
-    # Read dasha from kundli_dasha (the dasha JSON stored by chat_service)
-    dasha_data = session.get("kundli_dasha", {})
-    if isinstance(dasha_data, str):
-        try:
-            dasha_data = json.loads(dasha_data)
-        except:
-            dasha_data = {}
-
-    mahadasha = dasha_data.get("mahadasha", {}).get("planet", "Current")
-    
-    # Calculate house lords
-    career_lord = get_house_lord(10, ascendant) or "10th house lord"
-    marriage_lord = get_house_lord(7, ascendant) or "7th house lord"
-    wealth_lord = get_house_lord(11, ascendant) or "11th house lord"
-    health_lord = get_house_lord(6, ascendant) or "6th house lord"
-    education_lord = get_house_lord(5, ascendant) or "5th house lord"
-
-    def format_suggestion(s: str) -> str:
-        return s.format(
-            ascendant=ascendant,
-            mahadasha=mahadasha,
-            career_lord=career_lord,
-            marriage_lord=marriage_lord,
-            wealth_lord=wealth_lord,
-            health_lord=health_lord,
-            education_lord=education_lord
-        )
+    suggestions = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS) if topic else DEFAULT_SUGGESTIONS
 
     if language == "Hinglish":
         hinglish_map = {
@@ -275,101 +159,33 @@ def get_instant_suggestions(session: dict, topic: str, language: str = "English"
                 "Sahi partner ke liye kaunsa gemstone pehnu?",
                 "Mere Dasha ke hisaab se shaadi kab hogi?",
                 "Mera 7th house kaisa hai?",
-                "Kya Venus meri shaadi ke liye strong hai?",
-                "Mera Navamsa chart spouse ke baare mein kya kehta hai?",
-                "Konse planets shaadi mein delay kar rahe hain?",
-                "Shaadi ke obstacles hatane ke liye kaunsa upay karoon?",
-                "Love marriage hogi ya arranged?",
-                "Mera current Antardasha shaadi timing ke liye kaisa hai?",
-                "Kya Rahu ya Ketu meri shaadi ko affect kar rahe hain?",
-                "Konsa mantra ya puja jaldi shaadi ke liye best hai?",
-                "Kya is {mahadasha} Mahadasha mein shaadi hogi?",
-                "Future spouse ki qualities kya hongi mere chart ke anusar?",
-                "{marriage_lord} (mera 7th house lord) kahan placed hai?",
-                "Saturn meri shaadi ki timing ko kaise affect karta hai?",
             ],
             "career": [
                 "Career ke liye kaunsa gemstone sahi rahega?",
                 "Agli 2 saalon mein career growth kab hogi?",
-                "Sarkari naukri ke liye mera 10th house ({career_lord}) kaisa hai?",
-                "D10 chart mera career ke baare mein kya kehta hai?",
-                "Konsa planet mera career support karta hai?",
-                "Kya is Dasha mein promotion milegi?",
-                "Kya abhi khud ka business shuru karna sahi hai?",
-                "Konsi field mujhe suit karti hai chart ke hisaab se?",
-                "Kya career mein delays hain, kaunse planets ki wajah se?",
-                "Job change karna sahi rahega current Dasha mein?",
-                "{career_lord} (10th house lord) ko strong karne ka kaunsa upay karoon?",
-                "Videsh mein kaam karne ke chances hain mera chart mein?",
-                "Business ke liye Mercury kaisa hai mera chart mein?",
-                "6th house mera work life ko kaise affect karta hai?",
-                "Current Antardasha professional life ke liye kaisa hai?",
+                "Sarkari naukri ke liye mera 10th house kaisa hai?",
             ],
             "finance": [
                 "Paisa badhane ke liye kaunsa stone ya upay karoon?",
                 "Mere Dasha mein income kab badhegi?",
-                "Mera 11th house ({wealth_lord}) gains ke liye kaisa hai?",
-                "Jupiter mera wealth ke liye well-placed hai?",
-                "2nd house wealth ke baare mein kya kehta hai?",
-                "Kya aane wale saal mein koi bada financial loss hoga?",
-                "Konsa planet financial growth rok raha hai?",
-                "Kya abhi investment ke liye sahi time hai?",
-                "Savings badhane ke liye kaunsa upay sahi hai?",
-                "Kya koi unexpected income ya inheritance milegi?",
-                "Rahu income pe kaisa asar dalta hai mere chart mein?",
-                "Current {mahadasha} Mahadasha financial stability ke liye kaisi hai?",
-                "Konsa business ya investment mujhe suit karta hai?",
-                "Debt kam karne ka koi astrological upay hai?",
-                "Mera overall wealth kaunsa house lord control karta hai?",
+                "Mera 11th house gains ke liye kaisa hai?",
             ],
             "health": [
                 "Sehat ke liye kaunsa gemstone ya upay sahi hai?",
                 "Abhi kaun sa planet meri health affect kar raha hai?",
                 "Meri current Dasha body strength pe kaisa asar kar rahi hai?",
-                "Chart ke hisaab se mera konsa body part vulnerable hai?",
-                "Saturn ka transit energy levels pe kaisa asar dalta hai?",
-                "8th house longevity ke baare mein kya kehta hai?",
-                "Immune system ke liye kaunsa mantra best hai?",
-                "Koi aisa period aa raha hai jab zyada dhyan rakhna padega?",
-                "Rahu/Ketu placement wellbeing ko kaise affect karta hai?",
-                "Mars weak hai toh energy pe kya asar hoga?",
-                "Current Antardasha health ko kaise influence karta hai?",
-                "6th house afflicted hai mere chart mein?",
-                "Is Dasha mein sehat ke liye kaunsa upay best hai?",
-                "Konsa planet overall health control karta hai?",
-                "Diet ya lifestyle changes chart ke hisaab se konse karoon?",
             ],
             "education": [
                 "Concentration ke liye kaunsa gemstone sahi hai?",
                 "Mera chart higher education ya abroad ke liye kaisa hai?",
                 "Exam ke liye best time kaunsa hai?",
-                "Academic success ke liye Mercury kaisa hai mere chart mein?",
-                "5th house intelligence ke baare mein kya kehta hai?",
-                "Competitive exams clear karne ke liye konsa Dasha best hai?",
-                "Jupiter mera chart mein knowledge ke liye strong hai?",
-                "Kya is Dasha mein achhe college mein admission milega?",
-                "Focus aur padhai ke liye kaunsa upay karoon?",
-                "Ketu concentration ko negative affect kar raha hai?",
-                "Videsh se degree ke liye 9th house kaisa hai?",
-                "Scholarship milne ke chances hain mere chart mein?",
-                "Padhai ke liye konsa planet strengthen karoon?",
-                "Naya course ya skill seekhne ke liye abhi sahi time hai?",
-                "4th house foundational education ke baare mein kya kehta hai?",
             ],
         }
-        pool = hinglish_map.get(topic, [
+        return hinglish_map.get(topic, [
             "Mere liye kaunsa gemstone lucky hai?",
             "Meri current Dasha overall kaisi hai?",
-            "Mera Lagna kya kehta hai mere baare mein?",
-            "Mera sabse dominant planet kaunsa hai?",
-            "Agle saal ka sabse acha time kaunsa hoga mere liye?",
-            "Koi bada planetary change aane wala hai?",
-            "Chart ke hisaab se mujhe kaunsa upay karna chahiye?",
-            "Moon sign meri emotions pe kaisa asar karta hai?",
-            "Mera Nakshatra mere life path ke baare mein kya kehta hai?",
-            "Mere chart ki sabse badi strength kya hai?",
+            "Mera Lagna (Ascendant) kya kehta hai?",
         ])
-        return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
 
     if language == "Hindi":
         hindi_map = {
@@ -377,106 +193,35 @@ def get_instant_suggestions(session: dict, topic: str, language: str = "English"
                 "सही जीवनसाथी के लिए कौन सा रत्न पहनूं?",
                 "मेरी दशा के अनुसार विवाह कब होगा?",
                 "मेरा सप्तम भाव कैसा है?",
-                "क्या शुक्र मेरी कुंडली में विवाह के लिए शुभ है?",
-                "मेरा नवांश चार्ट जीवनसाथी के बारे में क्या कहता है?",
-                "कौन से ग्रह विवाह में देरी कर रहे हैं?",
-                "विवाह की बाधाएं दूर करने के लिए कौन सा उपाय करूं?",
-                "प्रेम विवाह होगा या अरेंज्ड?",
-                "मेरी वर्तमान अंतर्दशा विवाह के लिए कैसी है?",
-                "क्या राहु या केतु मेरे विवाह को प्रभावित कर रहे हैं?",
-                "जल्दी विवाह के लिए कौन सा मंत्र या पूजा करें?",
-                "क्या इस महादशा में विवाह हो सकता है?",
-                "मेरे जीवनसाथी के गुण क्या होंगे?",
-                "सप्तम भाव का स्वामी कहां स्थित है?",
-                "शनि मेरी विवाह की संभावनाओं को कैसे प्रभावित करता है?",
             ],
             "career": [
                 "करियर के लिए कौन सा रत्न सही रहेगा?",
                 "अगले 2 वर्षों में करियर विकास कब होगा?",
                 "सरकारी नौकरी के लिए मेरा दशम भाव कैसा है?",
-                "D10 चार्ट मेरे करियर के बारे में क्या कहता है?",
-                "कौन सा ग्रह मेरे करियर को सबसे ज्यादा सपोर्ट करता है?",
-                "क्या इस दशा में पदोन्नति मिलेगी?",
-                "क्या अभी स्वयं का व्यवसाय शुरू करना उचित है?",
-                "मेरी कुंडली के अनुसार कौन सा क्षेत्र उपयुक्त है?",
-                "करियर में देरी के लिए कौन से ग्रह जिम्मेदार हैं?",
-                "नौकरी बदलना उचित होगा इस दशा में?",
-                "दशम भाव के स्वामी को मजबूत करने का उपाय?",
-                "विदेश में काम करने के योग हैं मेरी कुंडली में?",
-                "व्यापार के लिए बुध मेरे चार्ट में कैसा है?",
-                "षष्ठ भाव मेरे कार्यजीवन को कैसे प्रभावित करता है?",
-                "वर्तमान अंतर्दशा व्यावसायिक जीवन के लिए कैसी है?",
             ],
             "finance": [
                 "धन वृद्धि के लिए कौन सा रत्न या उपाय करूं?",
                 "मेरी दशा में आय कब बढ़ेगी?",
                 "मेरा एकादश भाव लाभ के लिए कैसा है?",
-                "क्या बृहस्पति मेरी कुंडली में धन के लिए शुभ है?",
-                "द्वितीय भाव संचित धन के बारे में क्या कहता है?",
-                "क्या अगले वर्ष कोई बड़ी आर्थिक हानि होगी?",
-                "कौन सा ग्रह आर्थिक वृद्धि में बाधा डाल रहा है?",
-                "क्या अभी निवेश के लिए सही समय है?",
-                "बचत बढ़ाने के लिए कौन सा उपाय उचित है?",
-                "क्या कोई अप्रत्याशित आय या विरासत मिलेगी?",
-                "राहु आय पर कैसा प्रभाव डालता है मेरी कुंडली में?",
-                "वर्तमान महादशा आर्थिक स्थिरता के लिए कैसी है?",
-                "मुझे कौन सा व्यवसाय या निवेश उपयुक्त रहेगा?",
-                "कर्ज कम करने का कोई ज्योतिषीय उपाय है?",
-                "मेरी कुल संपदा को कौन सा भाव नियंत्रित करता है?",
             ],
             "health": [
                 "स्वास्थ्य के लिए कौन सा रत्न या उपाय उचित है?",
                 "अभी कौन सा ग्रह मेरे स्वास्थ्य को प्रभावित कर रहा है?",
                 "वर्तमान दशा शारीरिक शक्ति पर कैसा प्रभाव डाल रही है?",
-                "कुंडली के अनुसार मेरा कौन सा अंग सबसे कमजोर है?",
-                "शनि का गोचर ऊर्जा स्तर पर कैसा प्रभाव डालता है?",
-                "अष्टम भाव दीर्घायु के बारे में क्या कहता है?",
-                "रोग प्रतिरोधक क्षमता के लिए कौन सा मंत्र उचित है?",
-                "क्या कोई ऐसा समय आ रहा है जब विशेष सावधानी बरतनी होगी?",
-                "राहु/केतु की स्थिति स्वास्थ्य को कैसे प्रभावित करती है?",
-                "मंगल कमजोर हो तो ऊर्जा पर क्या प्रभाव पड़ता है?",
-                "वर्तमान अंतर्दशा स्वास्थ्य को कैसे प्रभावित करती है?",
-                "क्या षष्ठ भाव मेरी कुंडली में पीड़ित है?",
-                "इस दशा में स्वास्थ्य की रक्षा के लिए कौन सा उपाय करें?",
-                "समग्र स्वास्थ्य को कौन सा भाव नियंत्रित करता है?",
-                "कुंडली के अनुसार कौन सी जीवनशैली अपनानी चाहिए?",
             ],
             "education": [
                 "एकाग्रता के लिए कौन सा रत्न उचित है?",
                 "उच्च शिक्षा या विदेश के लिए मेरी कुंडली कैसी है?",
                 "परीक्षा के लिए सर्वोत्तम समय कौन सा है?",
-                "शैक्षणिक सफलता के लिए बुध मेरे चार्ट में कैसा है?",
-                "पंचम भाव बुद्धि के बारे में क्या कहता है?",
-                "प्रतियोगी परीक्षाओं के लिए कौन सी दशा सर्वोत्तम है?",
-                "ज्ञान के लिए बृहस्पति मेरी कुंडली में शुभ है?",
-                "क्या इस दशा में किसी अच्छे संस्थान में प्रवेश मिलेगा?",
-                "पढ़ाई में मन लगाने के लिए कौन सा उपाय करें?",
-                "क्या केतु एकाग्रता को नकारात्मक रूप से प्रभावित कर रहा है?",
-                "विदेश से डिग्री के लिए नवम भाव कैसा है?",
-                "छात्रवृत्ति मिलने के योग हैं मेरी कुंडली में?",
-                "पढ़ाई के लिए कौन सा ग्रह मजबूत करना चाहिए?",
-                "क्या नया कोर्स या कौशल सीखने के लिए अभी सही समय है?",
-                "चतुर्थ भाव प्राथमिक शिक्षा के बारे में क्या कहता है?",
             ],
         }
-        pool = hindi_map.get(topic, [
+        return hindi_map.get(topic, [
             "मेरे लिए कौन सा रत्न भाग्यशाली है?",
             "मेरी वर्तमान दशा कैसी है?",
-            "मेरा लग्न मेरे व्यक्तित्व के बारे में क्या कहता है?",
-            "मेरी कुंडली का सबसे प्रभावशाली ग्रह कौन सा है?",
-            "मेरी कुंडली की सबसे बड़ी शक्ति क्या है?",
-            "क्या जल्द ही कोई बड़ा ग्रह परिवर्तन होने वाला है?",
-            "अगले वर्ष मेरे लिए सबसे अनुकूल समय कौन सा है?",
-            "कुंडली के अनुसार मुझे कौन सा उपाय करना चाहिए?",
-            "चंद्र राशि मेरी भावनाओं को कैसे प्रभावित करती है?",
-            "मेरा नक्षत्र जीवन पथ के बारे में क्या कहता है?",
+            "मेरा लग्न (Ascendant) क्या कहता है?",
         ])
-        return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
 
-    # English (default)
-    pool = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS)
-    return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
-
+    return suggestions
 
 
 def get_house_for_sign(sign_name: str, ascendant_sign: str) -> Optional[int]:
@@ -513,14 +258,14 @@ def build_topic_emphasis(topic: str, planets: List[dict], ascendant_sign: str, d
 
     if house_sign:
         lord_str = f", ruled by {house_lord_name}" if house_lord_name else ""
-        lines.append(f"{get_ordinal(house_num)} House (governs {topic}): occupied by {house_sign}{lord_str}")
+        lines.append(f"{house_num}th House (governs {topic}): occupied by {house_sign}{lord_str}")
 
     if house_lord_name:
         lord_match = next((p for p in planets if p.get("name") == house_lord_name), None)
         if lord_match:
             lord_sign = lord_match.get("sign_name", "")
             lord_house = get_house_for_sign(lord_sign, ascendant_sign)
-            lord_house_str = f", in the {get_ordinal(lord_house)} house" if lord_house else ""
+            lord_house_str = f", in the {lord_house}th house" if lord_house else ""
             lines.append(f"{house_lord_name} ({house_num}th Lord): placed in {lord_sign}{lord_house_str}")
 
     for planet_name in config["planets"]:
@@ -528,7 +273,7 @@ def build_topic_emphasis(topic: str, planets: List[dict], ascendant_sign: str, d
         if match:
             sign = match.get("sign_name", "")
             house = get_house_for_sign(sign, ascendant_sign)
-            house_str = f", in the {get_ordinal(house)} house" if house else ""
+            house_str = f", in the {house}th house" if house else ""
             retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
             lines.append(f"{planet_name} (significator for {topic}): in {sign}{house_str}{retro}")
 
@@ -564,9 +309,9 @@ def build_explanation_footer(topic: Optional[str], ascendant_sign: Optional[str]
         house_num = config["house"]
         house_lord = get_house_lord(house_num, ascendant_sign)
         if house_lord:
-            factors.append(f"{get_ordinal(house_num)} House ({house_lord})")
+            factors.append(f"{house_num}th House ({house_lord})")
         else:
-            factors.append(f"{get_ordinal(house_num)} House")
+            factors.append(f"{house_num}th House")
         for planet in config["planets"]:
             factors.append(planet)
 
@@ -831,45 +576,18 @@ def build_reasoning_trace(
     planets: List[dict],
     dasha_info: Optional[dict],
     consistency_check: Optional[dict],
-    rag_sources: Optional[List[str]] = None,
+    rag_sources: Optional[List[Dict[str, Any]]] = None,
     evidence_vote: Optional[Dict] = None,
-    topic_result=None,  # Optional[TopicResult] from hybrid_router — avoids circular import
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
     computed elsewhere in the pipeline. Each step is {step, title, detail} —
     purely structural, no LLM call, so it's fast and 100% traceable to real
     inputs rather than an LLM's self-report of its own reasoning."""
-    if not ascendant_sign:
+    if not topic or not ascendant_sign:
         return []
 
-    effective_topic = topic or "health"
     steps = []
     step_num = 1
-
-    # ── Step 0: Classification metadata from HybridRouter ──────────────────
-    if topic_result is not None:
-        method_labels = {
-            "keyword": "Instant keyword match",
-            "semantic": "Semantic vector similarity",
-            "llm": "LLM structured classifier",
-            "none": "General chart query",
-        }
-        method_label = method_labels.get(topic_result.method, topic_result.method)
-        confidence_pct = int(topic_result.confidence * 100)
-        topic_label = topic.capitalize() if topic else "General Chart"
-        detail = f"Topic: {topic_label} — detected via {method_label} ({confidence_pct}% confidence)"
-        if topic_result.detected_concepts:
-            detail += f". Concepts: {', '.join(topic_result.detected_concepts[:5])}"
-        if topic_result.detected_houses:
-            house_strs = [get_ordinal(h) for h in topic_result.detected_houses[:4]]
-            detail += f". Houses in query: {', '.join(house_strs)}"
-        steps.append({"step": step_num, "title": "🔍 Classification", "detail": detail})
-        step_num += 1
-
-        # LLM summary only shown when Layer 3 fired
-        if topic_result.method == "llm" and topic_result.llm_summary:
-            steps.append({"step": step_num, "title": "🤖 Query Summary", "detail": topic_result.llm_summary})
-            step_num += 1
 
     if dasha_info:
         maha = dasha_info.get("current_mahadasha", {})
@@ -880,17 +598,17 @@ def build_reasoning_trace(
         steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
         step_num += 1
 
-    config = TOPIC_CHART_FACTORS.get(topic, {}) if topic else TOPIC_CHART_FACTORS.get("health", {})
+    config = TOPIC_CHART_FACTORS.get(topic, {})
     house_num = config.get("house")
     if house_num:
         house_sign = get_sign_for_house(house_num, ascendant_sign)
         house_lord = get_house_lord(house_num, ascendant_sign)
-        detail = f"{get_ordinal(house_num)} House governs {topic if topic else 'Self & General Chart'}"
+        detail = f"{house_num}th House governs {topic}"
         if house_sign:
             detail += f" — occupied by {house_sign}"
         if house_lord:
             detail += f", ruled by {house_lord}"
-        steps.append({"step": step_num, "title": f"Relevant House ({get_ordinal(house_num)})", "detail": detail})
+        steps.append({"step": step_num, "title": f"Relevant House ({house_num}th)", "detail": detail})
         step_num += 1
 
     sig_planets = config.get("planets", [])
@@ -902,7 +620,7 @@ def build_reasoning_trace(
                 sign = match.get("sign_name", "")
                 house = get_house_for_sign(sign, ascendant_sign)
                 retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
-                placements.append(f"{pname} in {sign} ({get_ordinal(house)} house){retro}")
+                placements.append(f"{pname} in {sign} ({house}th house){retro}")
         if placements:
             steps.append({
                 "step": step_num, "title": "Significator Planets",
@@ -947,14 +665,41 @@ def build_reasoning_trace(
         )
         steps.append({"step": step_num, "title": "Evidence Vote", "detail": detail})
         step_num += 1
-
     if rag_sources:
-        unique_sources = list(dict.fromkeys(rag_sources))[:3]
+        references = []
+        seen = set()
+
+        for hit in rag_sources:
+          source = hit.get("source", "Unknown")
+          page = hit.get("page")
+          score = hit.get("score")
+          # Avoid showing the same book/page twice
+          key = (source, page)
+          if key in seen:
+            continue
+          seen.add(key)
+
+          if page is not None:
+            reference = f"{source} — Page {page}"
+          else:
+            reference = source
+
+          if score is not None:
+            reference += f" (relevance: {score:.2f})"
+
+          references.append(reference)
+
+          if len(references) >= 3:
+            break
+
+    if references:
         steps.append({
-            "step": step_num, "title": "📚 Classical References Consulted",
-            "detail": ", ".join(unique_sources)
+            "step": step_num,
+            "title": "Classical References Consulted",
+            "detail": "; ".join(references)
         })
         step_num += 1
+    
 
     return steps
 
@@ -1047,9 +792,9 @@ def build_missing_evidence_note(
     house_num = config["house"]
     house_lord = get_house_lord(house_num, ascendant_sign) if ascendant_sign else None
     if house_lord and any(p.get("name") == house_lord for p in planets):
-        available.append(f"{get_ordinal(house_num)} House lord ({house_lord}) placement")
+        available.append(f"{house_num}th House lord ({house_lord}) placement")
     else:
-        missing.append(f"{get_ordinal(house_num)} House lord placement")
+        missing.append(f"{house_num}th House lord placement")
 
     for planet_name in config.get("planets", []):
         if any(p.get("name") == planet_name for p in planets):
@@ -1078,3 +823,63 @@ def build_missing_evidence_note(
         f"entirely or speak in slightly more general terms for that part only, while still "
         f"staying confident about what IS available."
     )
+    
+# ------------------------------------------------------------------
+# Evidence Consensus Label — converts the numeric confidence_pct + vote
+# counts from build_evidence_vote() into a plain HIGH/MEDIUM/LOW/CONFLICTING
+# label, and a matching instruction for the LLM prompt. This is what the
+# reasoning trace and _get_topic_bundle already call — was previously
+# missing, causing an import crash.
+# ------------------------------------------------------------------
+def get_evidence_consensus_label(vote: Optional[Dict]) -> str:
+    """Returns one of: HIGH, MEDIUM, LOW, CONFLICTING, NONE."""
+    if not vote:
+        return "NONE"
+
+    positive = vote.get("positive_count", 0)
+    negative = vote.get("negative_count", 0)
+    confidence = vote.get("confidence_pct", 50)
+    verdict = vote.get("verdict")
+
+    # Conflicting: real disagreement between independent sources, not just
+    # "not enough evidence either way" — both directions actually present.
+    if positive > 0 and negative > 0 and verdict == "mixed":
+        return "CONFLICTING"
+
+    if confidence >= 70:
+        return "HIGH"
+    if confidence >= 55:
+        return "MEDIUM"
+    return "LOW"
+
+
+def get_consensus_instruction(consensus_label: str) -> str:
+    """The actual instruction injected into the prompt — this is what
+    changes model behavior based on evidence strength, not just displays it."""
+    instructions = {
+        "HIGH": (
+            "Evidence Confidence: HIGH. Multiple independent sources (Dasha, chart "
+            "placement, yogas) agree. You may state your reading with strong, direct "
+            "confidence."
+        ),
+        "MEDIUM": (
+            "Evidence Confidence: MEDIUM. Sources are grounded but not unanimous. "
+            "Speak with normal confidence, but avoid absolute/guaranteed language."
+        ),
+        "LOW": (
+            "Evidence Confidence: LOW. Limited supporting signal was found. Keep the "
+            "reading general and honest about the limited evidence — do not manufacture "
+            "false certainty."
+        ),
+        "CONFLICTING": (
+            "Evidence Confidence: CONFLICTING. Independent sources genuinely disagree "
+            "(some supportive, some challenging). Do NOT force a single confident verdict. "
+            "Present both sides honestly in your own natural voice — this is real nuance "
+            "in the chart, not a flaw in your reasoning."
+        ),
+        "NONE": (
+            "Evidence Confidence: Not computed for this question. Answer based on "
+            "available chart and Dasha data as normal."
+        ),
+    }
+    return instructions.get(consensus_label, instructions["NONE"])

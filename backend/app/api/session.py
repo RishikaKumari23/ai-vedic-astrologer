@@ -189,9 +189,7 @@ async def update_session_info(session_id: str, profile_update: dict):
             profile_update["weekly_guidance"] = None
             profile_update["weekly_week_start"] = None
             profile_update["last_reasoning_trace"] = None
-            profile_update["topic_memory"] = None
-            profile_update["topic_cache"] = None
-            logger.info(f"Language changed for {session_id} — cleared dashboard, guidance, and topic cache")
+            logger.info(f"Language changed for {session_id} — cleared dashboard and guidance cache")
 
         updated = db.update_session(session_id, profile_update)
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import  { useState, useEffect } from 'react';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
 import { ProfileCard } from './components/ProfileCard';
@@ -15,7 +15,7 @@ import ReasoningTrace from './components/ReasoningTrace';
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
 
-import { API_BASE } from './api';
+const API_BASE = ((import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) || '/api';
 
 const GREETINGS: Record<string, (name: string) => string> = {
   English: (name) => `Hey ${name}!`,
@@ -24,10 +24,6 @@ const GREETINGS: Record<string, (name: string) => string> = {
 };
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return sessionStorage.getItem('astro_auth') === 'true';
-  });
-
   const [sessionId, setSessionId] = useState<string>('');
   const [onboarded, setOnboarded] = useState<boolean>(false);
   const [checkingProfile, setCheckingProfile] = useState<boolean>(true);
@@ -44,7 +40,6 @@ function App() {
   const [isResetting, setIsResetting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const seenSuggestions = useRef<Set<string>>(new Set());
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -109,29 +104,12 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setIngestStatus({ indexing_completed: data.indexing_completed, total_chunks: data.total_chunks, loading: false });
-        return data.indexing_completed;
       }
     } catch (err) {
       console.error('Error checking ingest status:', err);
       setIngestStatus(prev => ({ ...prev, loading: false }));
     }
-    return false;
   };
-
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (!ingestStatus.indexing_completed) {
-      interval = setInterval(async () => {
-        const completed = await checkIngestStatus();
-        if (completed) {
-          clearInterval(interval);
-        }
-      }, 5000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [ingestStatus.indexing_completed]);
 
   const handleSendMessage = async (text: string) => {
     const userMsg: Message = { role: 'user', content: text, timestamp: new Date().toISOString() };
@@ -185,13 +163,7 @@ function App() {
             setBirthPlace(event.birth_place);
             setLanguage(event.language);
             if (event.suggestions && Array.isArray(event.suggestions)) {
-              let fresh = event.suggestions.filter((s: string) => !seenSuggestions.current.has(s)).slice(0, 3);
-              if (fresh.length === 0) {
-                fresh = event.suggestions.slice(0, 3); // Fallback to seen ones if exhausted
-              } else {
-                fresh.forEach((s: string) => seenSuggestions.current.add(s));
-              }
-              setSuggestions(fresh);
+              setSuggestions(event.suggestions);
             }
             setTraceRefreshKey(prev => prev + 1);
           }
@@ -199,7 +171,7 @@ function App() {
       }
     } catch (err: any) {
       console.error('Failed to send message:', err);
-      setError(err.message || 'Something went wrong. Please try again.');
+      setError(err.message || 'Something went wrong. Is Ollama running?');
     } finally {
       setIsTyping(false);
     }
@@ -241,41 +213,6 @@ function App() {
     setOnboarded(true);
     setView('dashboard');
   };
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-[#0F172A] flex items-center justify-center p-4">
-        <div className="bg-[#1E293B] p-8 rounded-2xl border border-indigo-500/30 max-w-md w-full text-center shadow-xl shadow-indigo-500/10">
-          <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Sparkles className="w-8 h-8 text-indigo-400" />
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-2">Restricted Access</h2>
-          <p className="text-gray-400 mb-6">Please enter the password to access Call-Astro.</p>
-          <form onSubmit={(e: any) => {
-            e.preventDefault();
-            const pass = e.target.password.value;
-            if (pass === 'mentor2026') {
-              sessionStorage.setItem('astro_auth', 'true');
-              setIsAuthenticated(true);
-            } else {
-              alert('Incorrect password');
-            }
-          }}>
-            <input
-              type="password"
-              name="password"
-              placeholder="Password"
-              className="w-full bg-[#0F172A] border border-gray-700 rounded-xl px-4 py-3 text-white mb-4 focus:outline-none focus:border-indigo-500"
-              autoFocus
-            />
-            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl transition-colors">
-              Enter
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   if (checkingProfile) {
     return <div className="flex h-screen items-center justify-center text-slate-400">Loading...</div>;
@@ -440,7 +377,7 @@ function App() {
           <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
         </main>
         <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
-         <WeeklyGuidance key={(dob ?? '') + (birthTime ?? '')} sessionId={sessionId} language={language} />
+         <WeeklyGuidance sessionId={sessionId} />
          <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
         </aside>
 

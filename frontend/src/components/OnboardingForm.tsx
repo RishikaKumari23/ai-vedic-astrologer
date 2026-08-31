@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { API_BASE } from '../api';
 
 interface OnboardingFormProps {
   sessionId: string;
@@ -99,7 +98,7 @@ export default function OnboardingForm({ sessionId, onComplete }: OnboardingForm
       const [year, month, day] = dob.split('-');
       const formattedDob = `${day}-${month}-${year}`;
 
-      const response = await fetch(`${API_BASE}/session/${sessionId}`, {
+      const response = await fetch(`/api/session/${sessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
