@@ -21,6 +21,14 @@ except ImportError:
 class LLMService:
 
     def __init__(self):
+        self.provider = getattr(settings, "LLM_PROVIDER", "ollama")
+        
+        # ============================================================
+        # GROQ CLOUD
+        # ============================================================
+        self.groq_api_key = getattr(settings, "GROQ_API_KEY", "")
+        self.groq_model = getattr(settings, "GROQ_MODEL", "llama-3.1-8b-instant")
+        
         # ============================================================
         # LOCAL OLLAMA
         # ============================================================
@@ -61,6 +69,35 @@ class LLMService:
     ) -> str:
 
         try:
+            # ========================================================
+            # GROQ
+            # ========================================================
+            if self.provider == "groq" and self.groq_api_key:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+                
+                payload = {
+                    "model": self.groq_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                }
+                if json_format:
+                    payload["response_format"] = {"type": "json_object"}
+                    
+                headers = {
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    return response.json()["choices"][0]["message"]["content"]
+                else:
+                    logger.error(f"Groq error: {response.text}")
+                    raise Exception(f"Groq API error: {response.text}")
 
             # ========================================================
             # OLLAMA CLOUD
