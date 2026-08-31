@@ -575,7 +575,8 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.summary if topic_result else None)
+                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+
 
 
             kundli_str = "No chart data available."
@@ -773,7 +774,8 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.summary if topic_result else None)
+                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+
 
 
             kundli_str = "No chart data available."
