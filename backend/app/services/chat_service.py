@@ -220,17 +220,22 @@ class ChatService:
 
         return "No chart data available."
     
-    def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
+    def _get_rag_context(self, message_text: str, topic: Optional[str] = None, llm_summary: Optional[str] = None):
         """Retrieves top-K chunks, logs their relevance scores (so retrieval
         quality is actually visible/debuggable), and DROPS chunks below
         settings.MIN_RAG_RELEVANCE instead of silently feeding weak matches
         to the LLM as if they were solid ground truth."""
         try:
-            search_query = message_text
+            # Use the router's LLM-generated intent summary as the search query
+            # when available — it's always clean English and semantically precise,
+            # which dramatically improves book retrieval for Hinglish / vague queries.
+            # Fall back to raw message if no summary exists.
+            base_query = llm_summary if llm_summary else message_text
+            search_query = base_query
             if topic:
                 bias = get_search_bias(topic)
                 if bias:
-                    search_query = f"{message_text} {bias}"
+                    search_query = f"{base_query} {bias}"
 
             query_vector = self.embeddings_provider.get_embedding(search_query)
             hits = vector_store.hybrid_search(
@@ -570,7 +575,8 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic)
+                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.summary if topic_result else None)
+
 
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields:
@@ -767,7 +773,8 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic)
+                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.summary if topic_result else None)
+
 
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields:
