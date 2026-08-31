@@ -714,9 +714,17 @@ def build_reasoning_trace(
         seen = set()
 
         for hit in rag_sources:
-          source = hit.get("source", "Unknown")
-          page = hit.get("page")
-          score = hit.get("score")
+          if isinstance(hit, str):
+            source = hit
+            page = None
+            score = None
+          elif isinstance(hit, dict):
+            source = hit.get("source", "Unknown")
+            page = hit.get("page")
+            score = hit.get("score")
+          else:
+            continue
+
           # Avoid showing the same book/page twice
           key = (source, page)
           if key in seen:
@@ -729,7 +737,10 @@ def build_reasoning_trace(
             reference = source
 
           if score is not None:
-            reference += f" (relevance: {score:.2f})"
+            try:
+              reference += f" (relevance: {float(score):.2f})"
+            except (ValueError, TypeError):
+              pass
 
           references.append(reference)
 
