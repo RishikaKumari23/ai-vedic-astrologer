@@ -65,11 +65,20 @@ _KEYWORD_MAP: dict[str, str] = {
     "health": "health", "sehat": "health", "illness": "health", "disease": "health",
     "body": "health", "bimari": "health", "rog": "health", "aushadhi": "health",
     "doctor": "health", "hospital": "health", "surgery": "health", "cancer": "health",
-    "gemstone": "health", "stone": "health", "ratna": "health", "gem": "health",
-    "mahadasha": "health", "antardasha": "health", "dasha": "health",
-    "nakshatra": "health", "lagna": "health", "ascendant": "health",
-    "ashtakavarga": "health", "bindu": "health", "kakshya": "health", "shodhana": "health",
-    "transit": "health", "gochar": "health", "pratyantardasha": "health",
+    
+
+    # abroad
+    "abroad": "abroad", "foreign": "abroad", "visa": "abroad", "immigration": "abroad",
+    "country": "abroad", "settle": "abroad", "bidesh": "abroad", "videsh": "abroad", "relocate": "abroad",
+    "homeland": "abroad",
+
+    # remedies
+    "remedy": "remedies", "remedies": "remedies", "gemstone": "remedies", "mantra": "remedies",
+    "pooja": "remedies", "puja": "remedies", "upay": "remedies", "donate": "remedies",
+
+    # muhurta
+    "muhurta": "muhurta", "muhurat": "muhurta", "auspicious": "muhurta", "timing": "muhurta",
+    "shubh": "muhurta", "date": "muhurta",
 
     # finance
     "money": "finance", "finance": "finance", "paisa": "finance", "wealth": "finance",
@@ -111,11 +120,25 @@ _TOPIC_ANCHORS: dict[str, list[str]] = {
     ],
     "health": [
         "health disease illness body 6th house",
-        "ashtakavarga bindus planet transit",
-        "lagna ascendant personality nature",
-        "nakshatra dasha pratyantardasha planet placement",
-        "what does my chart say about me general",
-        "bindu kakshya shodhana sarvashtakavarga",
+        "medical issue surgery hospital doctor",
+        "physical strength weakness injury accident",
+        "mental peace anxiety stress",
+    ],
+
+    "abroad": [
+        "abroad foreign settlement visa immigration 12th house 9th house Rahu",
+        "settle in another country move relocate homeland",
+        "bidesh videsh travel journey",
+    ],
+    "remedies": [
+        "remedy gemstone mantra pooja puja upay donation",
+        "how to reduce bad effects of malefic planets",
+        "stone ratna pacify appease",
+    ],
+    "muhurta": [
+        "muhurta auspicious timing date shubh muhurat",
+        "best time to start buy inaugurate",
+        "panchang tithi nakshatra favorable time",
     ],
     "finance": [
         "money wealth income finance gains 11th house 2nd house",
@@ -130,6 +153,7 @@ _TOPIC_ANCHORS: dict[str, list[str]] = {
 
 # Cache: topic -> mean anchor embedding vector
 _anchor_cache: dict[str, np.ndarray] = {}
+_anchor_counts: dict[str, int] = {}
 _anchor_cache_ready = threading.Event()  # signals when cache is built
 
 
@@ -149,6 +173,7 @@ def _build_anchor_cache(embeddings_provider: "EmbeddingsProvider") -> None:
                 vec = embeddings_provider.get_embedding(phrase)
                 vecs.append(np.array(vec, dtype=np.float32))
             cache[topic] = np.mean(vecs, axis=0)
+            _anchor_counts[topic] = len(vecs)
         except Exception as e:
             logger.warning(f"HybridRouter: failed to embed anchors for '{topic}': {e}")
 
@@ -219,7 +244,7 @@ _ROUTER_SYSTEM_PROMPT = (
 
 _ROUTER_USER_PROMPT = """Classify this astrology question into the following fields:
 
-1. "topic" — MUST be exactly one of: "career", "marriage", "health", "finance", "education", or null if it's a general chart/planet/dasha question.
+1. "topic" — MUST be exactly one of: "career", "marriage", "health", "finance", "education", "abroad", "remedies", "muhurta", or null if it's a general chart/planet/dasha question.
 2. "houses" — list of house numbers (1-12) explicitly or implicitly relevant to this question. Empty list if none.
 3. "concepts" — list of specific astrological concepts mentioned (e.g. "Ashtakavarga", "Bindu", "Kakshya", "Shodhana", "Mahadasha", "Antardasha", "Pratyantardasha", "Nakshatra", "Transit", "Yoga", "Lagna"). Empty list if none.
 4. "summary" — one short sentence (max 15 words) describing what astrological topic this question is about.
@@ -310,6 +335,30 @@ def _detect_concepts_and_houses(text: str) -> tuple[List[str], List[int]]:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+
+def _adapt_anchor_cache(topic: str, text: str, embeddings_provider: "EmbeddingsProvider") -> None:
+    """Background task: dynamically update the topic's mean anchor vector with a new query."""
+    try:
+        if not _anchor_cache_ready.is_set() or topic not in _anchor_cache:
+            return
+        
+        # Embed the new user query
+        new_vec = np.array(embeddings_provider.get_embedding(text), dtype=np.float32)
+        
+        # Perform rolling average update
+        current_mean = _anchor_cache[topic]
+        n = _anchor_counts.get(topic, 1)
+        
+        # New mean = (Current Mean * N + New Vector) / (N + 1)
+        updated_mean = ((current_mean * n) + new_vec) / (n + 1)
+        
+        _anchor_cache[topic] = updated_mean
+        _anchor_counts[topic] = n + 1
+        
+        logger.info(f"HybridRouter: Adaptive Cache updated for '{topic}'. New sample count: {n + 1}")
+    except Exception as e:
+        logger.warning(f"HybridRouter: Adaptive cache update failed: {e}")
+
 def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> TopicResult:
     """
     Classify a user message into a topic using the 3-layer hybrid pipeline.
@@ -354,6 +403,17 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
     all_concepts = list(dict.fromkeys(detected_concepts + llm_concepts))
 
     logger.info(f"HybridRouter L3 result: topic='{llm_topic}', summary='{llm_summary}'")
+    
+    # Adaptive Cache Improvement: If Layer 3 found a valid topic, 
+    # learn from it by updating the semantic anchors in the background
+    if llm_topic:
+        threading.Thread(
+            target=_adapt_anchor_cache,
+            args=(llm_topic, message, embeddings_provider),
+            daemon=True,
+            name="hybrid-router-adaptive"
+        ).start()
+
     return TopicResult(
         topic=llm_topic,
         method="llm",

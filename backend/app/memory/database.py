@@ -46,6 +46,8 @@ class MemoryDatabase:
                     yoga_text TEXT,
                     dasha_tree_raw TEXT,
                     topic_cache TEXT,
+                    conversation_summary TEXT,
+                    last_summarized_msg_count INTEGER DEFAULT 0,
                     latitude REAL,
                     longitude REAL,
                     updated_at TEXT
@@ -73,6 +75,8 @@ class MemoryDatabase:
                 ("yoga_text", "TEXT"),
                 ("dasha_tree_raw", "TEXT"),
                 ("topic_cache", "TEXT"),
+                ("conversation_summary", "TEXT"),
+                ("last_summarized_msg_count", "INTEGER"),
             ]:
                 if col_name not in existing_cols:
                     cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")

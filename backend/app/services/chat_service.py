@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
+import threading
 from app.memory.database import db
 from app.services.llm_service import llm_service
 from app.services.geocoding_service import geocoding_service
@@ -37,6 +38,63 @@ class ChatService:
             formatted.append(f"{role_name}: {msg['content']}")
         return "\n".join(formatted)
 
+
+    def _get_context_window(self, session_id: str, session: dict) -> str:
+        """Returns the formatted context: [Rolling Summary] + [Last 4 messages]."""
+        summary = session.get("conversation_summary")
+        # Only fetch last 4 messages (2 Q&A pairs) to save context
+        recent_history = db.get_history(session_id, limit=4)
+        recent_text = self._format_history_for_llm(recent_history)
+        
+        if summary:
+            return f"[SUMMARY OF EARLIER CONVERSATION]: {summary}\n\n[RECENT MESSAGES]:\n{recent_text}"
+        return recent_text
+
+    def _update_rolling_summary(self, session_id: str, session: dict) -> None:
+        """Runs in background. Every 8 unsummarized messages, summarizes the oldest 6."""
+        try:
+            history = db.get_history(session_id, limit=100)
+            total_msgs = len(history)
+            last_count = session.get("last_summarized_msg_count") or 0
+            
+            # We want to keep the last 2 messages (1 Q&A pair) unsummarized
+            unsummarized_count = total_msgs - last_count
+            if unsummarized_count >= 8:  # 4 Q&A pairs
+                # Grab at most 8 messages (4 turns) at a time to prevent massive KV cache OOM on M1 Macs
+                chunk_end = min(last_count + 8, total_msgs - 2)
+                messages_to_summarize = history[last_count : chunk_end]
+                
+                # We also need to update last_count to chunk_end instead of total_msgs - 2
+                new_last_count = chunk_end
+                
+                if not messages_to_summarize:
+                    return
+                
+                text_to_summarize = self._format_history_for_llm(messages_to_summarize)
+                existing_summary = session.get("conversation_summary") or ""
+                
+                prompt = (
+                    "You are a summarization assistant. Summarize the following astrological conversation "
+                    "in 2-3 concise sentences. Focus on the main topics discussed, predictions made, and user details.\n"
+                )
+                if existing_summary:
+                    prompt += f"\nPrevious summary:\n{existing_summary}\n"
+                prompt += f"\nNew messages to append to summary:\n{text_to_summarize}\n"
+                prompt += "\nReturn ONLY the new integrated summary, nothing else."
+                
+                new_summary = llm_service.generate(prompt=prompt, temperature=0.3)
+                
+                # Update DB
+                db.update_session(session_id, {
+                    "conversation_summary": new_summary.strip(),
+                    "last_summarized_msg_count": new_last_count
+                })
+                session["conversation_summary"] = new_summary.strip()
+                session["last_summarized_msg_count"] = new_last_count
+                logger.info("Successfully updated rolling conversation summary.")
+        except Exception as e:
+            logger.error(f"Failed to update rolling summary: {e}")
+
     def _to_24h(self, time_str: str) -> str:
         if not time_str:
             return ""
@@ -50,6 +108,60 @@ class ChatService:
                 return parsed_time.strftime("%H:%M")
             except ValueError:
                 return time_str
+
+
+    def _get_temperature(self, intent: str, repeat_hint: str = "") -> float:
+        """Return the right creativity level based on what the user is asking.
+        
+        - timing / simple_fact  → low (0.2): needs precision, specific dates/planets
+        - explanation / strength_check → medium (0.5): factual but needs explanation
+        - remedy → medium-low (0.45): grounded but warm tone
+        - general → high (0.7): creative, warm, varied
+        - repeat_hint → always bumped to 0.8 to force fresh phrasing
+        """
+        if repeat_hint:
+            return 0.8
+        temperature_map = {
+            "timing":         0.2,
+            "simple_fact":    0.2,
+            "explanation":    0.5,
+            "strength_check": 0.5,
+            "remedy":         0.45,
+            "general":        0.7,
+        }
+        return temperature_map.get(intent, 0.7)
+
+
+    def _run_chain_of_thought(self, message_text: str, kundli_data: str,
+                               dasha_info: str, topic: str, language: str) -> str:
+        """Step 1 of 2: Ask the LLM to silently reason about the chart BEFORE
+        generating the final response. Returns a structured 3-point analysis
+        that gets injected into the main prompt as 'grounded facts'.
+        
+        This forces the 8B model to think first, then speak — dramatically
+        reducing hallucinations and improving relevance.
+        """
+        cot_prompt = (
+            f"You are a Vedic astrology analysis engine. Given the data below, "
+            f"identify the 3 most relevant astrological facts that directly answer "
+            f"the user's question. Be specific: name actual planets, houses, and "
+            f"periods. Do NOT write a response to the user — only output 3 bullet points.\n\n"
+            f"User's Question: {message_text}\n"
+            f"Topic: {topic or 'general'}\n"
+            f"Birth Chart Summary: {kundli_data[:800]}\n"
+            f"Current Dasha: {dasha_info[:300]}\n\n"
+            f"Output format (3 lines only, no extra text):\n"
+            f"1. [Most relevant chart fact]\n"
+            f"2. [Second relevant fact or timing detail]\n"
+            f"3. [Supporting factor or cautionary note]"
+        )
+        try:
+            result = llm_service.generate(prompt=cot_prompt, temperature=0.2)
+            logger.info(f"[CoT] Reasoning facts generated: {result[:120]}...")
+            return result.strip()
+        except Exception as e:
+            logger.warning(f"[CoT] Chain-of-thought failed, skipping: {e}")
+            return ""
 
     def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
         """Fetches Kundli + real Dasha data once, and ALSO pre-computes and
@@ -394,8 +506,7 @@ class ChatService:
         logger.info(f"Processing chat message for session: {session_id}")
         try:
             session = db.get_or_create_session(session_id)
-            history = db.get_history(session_id, limit=10)
-            history_text = self._format_history_for_llm(history)
+            history_text = self._get_context_window(session_id, session)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -444,6 +555,7 @@ class ChatService:
                         logger.error(f"LLM failed: {llm_err}")
                         response_text = f"Kripya apna {next_missing_name} batayein."
                     db.add_message(session_id, "assistant", response_text)
+                    threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
                     return {
                         "session_id": session_id, "message": response_text,
                         "dob": session.get("dob"), "birth_time": session.get("birth_time"),
@@ -484,6 +596,23 @@ class ChatService:
 
             try:
                 current_date = datetime.now().strftime("%d %B %Y")
+
+                # Chain-of-Thought for non-streaming path
+                cot_facts = ""
+                if is_astrology and not missing_fields and kundli_str != "No chart data available.":
+                    cot_facts = self._run_chain_of_thought(
+                        message_text, kundli_str,
+                        session.get("kundli_dasha") or "",
+                        topic or "general", language
+                    )
+
+                cot_injection = ""
+                if cot_facts:
+                    cot_injection = (
+                        f"\n\nPRE-ANALYSED CHART FACTS (use these as your grounded foundation — "
+                        f"do NOT ignore them or contradict them in your response):\n{cot_facts}"
+                    )
+
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     name=session.get("name") or "Friend",
                     language=language, dob=session.get("dob") or "Not provided",
@@ -497,7 +626,10 @@ class ChatService:
                     response_contract=response_contract,
                     history=history_text, query=message_text
                 )
-                response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
+                if cot_injection:
+                    astrologer_prompt += cot_injection
+                _temp = self._get_temperature(intent, "")
+                response_text = llm_service.generate(prompt=astrologer_prompt, temperature=_temp)
 
                 if is_astrology and not missing_fields:
                     recent_texts = self._get_recent_assistant_texts(session_id)
@@ -518,7 +650,7 @@ class ChatService:
                             logger.info(f"Claim validation found {len(claim_failures)} issue(s) — regenerating with corrections")
                             retry_prompt += "\n\n" + build_claim_correction_instructions(claim_failures)
 
-                        response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
+                        response_text = llm_service.generate(prompt=retry_prompt, temperature=self._get_temperature(intent, 'retry'))
 
                         # Re-validate once after the fix attempt, log-only —
                         # don't loop indefinitely if the model still misses it.
@@ -530,6 +662,7 @@ class ChatService:
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
 
             db.add_message(session_id, "assistant", response_text)
+            threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
 
             if is_astrology and not missing_fields:
                 try:
@@ -566,8 +699,7 @@ class ChatService:
         language = _session_pre.get("language", "English")
         try:
             session = _session_pre
-            history = db.get_history(session_id, limit=10)
-            history_text = self._format_history_for_llm(history)
+            history_text = self._get_context_window(session_id, session)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -621,6 +753,7 @@ class ChatService:
                         yield {"type": "chunk", "text": full_text}
 
                     db.add_message(session_id, "assistant", full_text)
+                    threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
                     yield {"type": "done", "session_id": session_id, "message": full_text,
                            "dob": session.get("dob"), "birth_time": session.get("birth_time"),
                            "birth_place": session.get("birth_place"), "language": language}
@@ -664,6 +797,19 @@ class ChatService:
                 repeat_hint = self._get_repeat_topic_hint(session, topic)
 
             current_date = datetime.now().strftime("%d %B %Y")
+
+            # Chain-of-Thought: disabled in streaming path to avoid 30-40s blank screen.
+            # CoT is only used in the non-streaming /api/chat endpoint where buffering is acceptable.
+            cot_facts = ""  # Streaming always skips CoT for UX reasons
+
+            # Inject CoT facts into the prompt if available
+            cot_injection = ""
+            if cot_facts:
+                cot_injection = (
+                    f"\n\nPRE-ANALYSED CHART FACTS (use these as your grounded foundation — "
+                    f"do NOT ignore them or contradict them in your response):\n{cot_facts}"
+                )
+
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
@@ -679,8 +825,10 @@ class ChatService:
             )
             if repeat_hint:
                 astrologer_prompt += f"\n\n{repeat_hint}"
+            if cot_injection:
+                astrologer_prompt += cot_injection
 
-            gen_temperature = 0.75 if repeat_hint else 0.6
+            gen_temperature = self._get_temperature(intent, repeat_hint)
 
             full_text = ""
             try:
@@ -698,6 +846,7 @@ class ChatService:
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
+            threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
 
             # Claim validation is LOG-ONLY here — tokens are already streamed
             # to the user, so there's nothing left to regenerate cleanly.

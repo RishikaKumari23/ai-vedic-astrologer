@@ -20,7 +20,7 @@ class EmbeddingsProvider:
         try:
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading local SentenceTransformer model: {self.local_model_name}")
-            self.local_model = SentenceTransformer(self.local_model_name)
+            self.local_model = SentenceTransformer(self.local_model_name, device='cpu')
             logger.info("Local SentenceTransformer model loaded successfully.")
         except ImportError:
             logger.error(
