@@ -13,8 +13,13 @@ class Settings(BaseSettings):
     PORT: int = 8000
     HOST: str = "0.0.0.0"
 
-    # LLM Provider — "groq" (cloud, always-on) or "ollama" (local)
-    LLM_PROVIDER: str = "groq"
+    # LLM Provider — "openai", "groq" (cloud, always-on) or "ollama" (local)
+    LLM_PROVIDER: str = "openai"
+
+    # OpenAI Settings (used when LLM_PROVIDER=openai)
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
 
     # Groq Settings (used when LLM_PROVIDER=groq)
     GROQ_API_KEY: str = ""
