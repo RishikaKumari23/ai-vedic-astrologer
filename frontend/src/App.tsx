@@ -13,11 +13,10 @@ import GoToChatCard from './components/GoToChatCard';
 import WeeklyGuidance from './components/WeeklyGuidance';
 import FaqStarter from './components/FaqStarter';
 import ReasoningTrace from './components/ReasoningTrace';
+import { API_BASE } from './api';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
-
-const API_BASE = ((import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) || '/api';
 
 const GREETINGS: Record<string, (name: string) => string> = {
   English: (name) => `Hey ${name}!`,
@@ -51,35 +50,72 @@ function App() {
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ indexing_completed: false, total_chunks: 0, loading: true });
 
-  // 1. Initialize session and load saved profiles from localStorage
+  // 1. Initial boot: fetch all profiles from backend & initialize active session
   useEffect(() => {
-    let savedProfilesStr = localStorage.getItem('call-astro_profiles');
-    let loadedProfiles: Profile[] = [];
-    if (savedProfilesStr) {
+    const initApp = async () => {
+      let savedProfiles: Profile[] = [];
+      const savedProfilesStr = localStorage.getItem('call-astro_profiles');
+      if (savedProfilesStr) {
+        try { savedProfiles = JSON.parse(savedProfilesStr); } catch (e) { /* ignore */ }
+      }
+
+      // Also query backend for all valid profiles in database to merge
       try {
-        loadedProfiles = JSON.parse(savedProfilesStr);
-      } catch (e) {
-        console.error('Failed to parse saved profiles:', e);
+        const res = await fetch(`${API_BASE}/session/profiles/all`);
+        if (res.ok) {
+          const data = await res.json();
+          const backendProfiles: any[] = data.profiles || [];
+          
+          backendProfiles.forEach(bp => {
+            const exists = savedProfiles.some(p => p.id === bp.session_id);
+            if (!exists) {
+              savedProfiles.push({
+                id: bp.session_id,
+                name: bp.name || 'User',
+                relation: bp.relation || (bp.name === 'Rishika' ? 'Self' : 'Other'),
+                dob: bp.dob,
+                birth_time: bp.birth_time,
+                birth_place: bp.birth_place,
+                gender: bp.gender,
+                language: bp.language || 'Hinglish',
+                isPrimary: bp.name === 'Rishika' || bp.relation === 'Self',
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Failed to sync backend profiles:', err);
       }
-    }
 
-    let sid = localStorage.getItem('call-astro_session_id');
-    if (!sid) {
-      if (loadedProfiles.length > 0) {
-        sid = loadedProfiles[0].id;
-      } else {
-        sid = 'session_' + Math.random().toString(36).substring(2, 15);
+      // Ensure at least one profile is marked isPrimary
+      if (savedProfiles.length > 0) {
+        const hasPrimary = savedProfiles.some(p => p.isPrimary);
+        if (!hasPrimary) {
+          const rishika = savedProfiles.find(p => p.name?.toLowerCase() === 'rishika');
+          if (rishika) rishika.isPrimary = true;
+          else savedProfiles[0].isPrimary = true;
+        }
       }
-      localStorage.setItem('call-astro_session_id', sid);
-    }
 
-    setSessionId(sid);
-    setProfiles(loadedProfiles);
+      let activeSid = localStorage.getItem('call-astro_session_id');
+      if (!activeSid || (savedProfiles.length > 0 && !savedProfiles.some(p => p.id === activeSid))) {
+        const primary = savedProfiles.find(p => p.isPrimary) || savedProfiles[0];
+        activeSid = primary ? primary.id : 'session_' + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem('call-astro_session_id', activeSid);
+      }
+
+      localStorage.setItem('call-astro_profiles', JSON.stringify(savedProfiles));
+      setProfiles(savedProfiles);
+      setSessionId(activeSid);
+    };
+
+    initApp();
   }, []);
 
-  // 2. Fetch active session data whenever sessionId changes
+  // 2. Fetch session data & Kundli chart whenever active sessionId changes
   useEffect(() => {
     if (!sessionId) return;
+
     const fetchSessionData = async () => {
       try {
         setCheckingProfile(true);
@@ -93,41 +129,41 @@ function App() {
           setBirthPlace(profile.birth_place);
           setLanguage(profile.language || 'Hinglish');
 
-          const hasBirthDetails = Boolean(profile.dob && profile.birth_time && profile.birth_place);
-          setOnboarded(hasBirthDetails);
+          const hasDetails = Boolean(profile.dob && profile.birth_time && profile.birth_place);
+          setOnboarded(hasDetails);
 
-          // Sync into profiles registry
-          setProfiles(prevProfiles => {
-            const index = prevProfiles.findIndex(p => p.id === sessionId);
-            let updated: Profile[];
-            if (index >= 0) {
-              updated = [...prevProfiles];
-              updated[index] = {
-                ...updated[index],
-                name: profile.name || updated[index].name,
-                relation: profile.relation || updated[index].relation || 'Self',
-                dob: profile.dob,
-                birth_time: profile.birth_time,
-                birth_place: profile.birth_place,
-                language: profile.language || 'Hinglish',
-              };
-            } else {
-              const isFirst = prevProfiles.length === 0;
-              const newEntry: Profile = {
-                id: sessionId,
-                name: profile.name || 'My Profile',
-                relation: profile.relation || 'Self',
-                dob: profile.dob,
-                birth_time: profile.birth_time,
-                birth_place: profile.birth_place,
-                language: profile.language || 'Hinglish',
-                isPrimary: isFirst,
-              };
-              updated = [...prevProfiles, newEntry];
-            }
-            localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
-            return updated;
-          });
+          // Update profiles list in memory & localStorage
+          if (hasDetails) {
+            setProfiles(prev => {
+              const index = prev.findIndex(p => p.id === sessionId);
+              let updated: Profile[];
+              if (index >= 0) {
+                updated = prev.map(p => p.id === sessionId ? {
+                  ...p,
+                  name: profile.name || p.name,
+                  relation: profile.relation || p.relation || 'Self',
+                  dob: profile.dob,
+                  birth_time: profile.birth_time,
+                  birth_place: profile.birth_place,
+                  language: profile.language || 'Hinglish',
+                } : p);
+              } else {
+                const newP: Profile = {
+                  id: sessionId,
+                  name: profile.name || 'My Profile',
+                  relation: profile.relation || 'Self',
+                  dob: profile.dob,
+                  birth_time: profile.birth_time,
+                  birth_place: profile.birth_place,
+                  language: profile.language || 'Hinglish',
+                  isPrimary: prev.length === 0,
+                };
+                updated = [...prev, newP];
+              }
+              localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+              return updated;
+            });
+          }
         }
 
         const historyRes = await fetch(`${API_BASE}/chat/history/${sessionId}`);
@@ -176,6 +212,16 @@ function App() {
   // Switch to another profile
   const handleSelectProfile = (id: string) => {
     if (id === sessionId) return;
+    const target = profiles.find(p => p.id === id);
+    if (target) {
+      setName(target.name);
+      setRelation(target.relation || 'Self');
+      setDob(target.dob || null);
+      setBirthTime(target.birth_time || null);
+      setBirthPlace(target.birth_place || null);
+      setLanguage(target.language || 'Hinglish');
+      setOnboarded(Boolean(target.dob && target.birth_time && target.birth_place));
+    }
     setSessionId(id);
     localStorage.setItem('call-astro_session_id', id);
     setMessages([]);
@@ -192,13 +238,20 @@ function App() {
       localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
       return updated;
     });
+    setName(newProfile.name);
+    setRelation(newProfile.relation);
+    setDob(newProfile.dob || null);
+    setBirthTime(newProfile.birth_time || null);
+    setBirthPlace(newProfile.birth_place || null);
+    setLanguage(newProfile.language || 'Hinglish');
+    setOnboarded(true);
     setSessionId(newProfile.id);
     localStorage.setItem('call-astro_session_id', newProfile.id);
     setMessages([]);
     setKundliPlanets(null);
     setAscendantSign(null);
     setSuggestions([]);
-    setOnboarded(true);
+    setView('dashboard');
   };
 
   // Delete profile
@@ -216,8 +269,7 @@ function App() {
     if (id === sessionId) {
       const nextProfile = updated.find(p => p.isPrimary) || updated[0];
       if (nextProfile) {
-        setSessionId(nextProfile.id);
-        localStorage.setItem('call-astro_session_id', nextProfile.id);
+        handleSelectProfile(nextProfile.id);
       } else {
         const newSid = 'session_' + Math.random().toString(36).substring(2, 15);
         localStorage.setItem('call-astro_session_id', newSid);
@@ -334,14 +386,24 @@ function App() {
       birth_time: profile.birth_time,
       birth_place: profile.birth_place,
       language: profile.language,
-      isPrimary: true,
+      isPrimary: profiles.length === 0 || !profiles.some(p => p.isPrimary),
     };
-    setProfiles([updatedProfile]);
-    localStorage.setItem('call-astro_profiles', JSON.stringify([updatedProfile]));
+
+    setProfiles(prev => {
+      const index = prev.findIndex(p => p.id === sessionId);
+      let updated: Profile[];
+      if (index >= 0) {
+        updated = prev.map(p => p.id === sessionId ? { ...p, ...updatedProfile } : p);
+      } else {
+        updated = [...prev, updatedProfile];
+      }
+      localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+      return updated;
+    });
   };
 
-  if (checkingProfile && !name) {
-    return <div className="flex h-screen items-center justify-center text-slate-400 font-medium">Loading astrological chart...</div>;
+  if (checkingProfile && !name && profiles.length === 0) {
+    return <div className="flex h-screen items-center justify-center text-slate-400 font-medium">Loading astrological charts...</div>;
   }
 
   if (!onboarded) {

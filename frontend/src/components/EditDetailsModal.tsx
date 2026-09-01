@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import { API_BASE } from '../api';
 
 interface EditDetailsModalProps {
   sessionId: string;
@@ -51,7 +52,7 @@ export default function EditDetailsModal({
       const [year, month, day] = dob.split('-');
       const formattedDob = `${day}-${month}-${year}`;
 
-      const response = await fetch(`/api/session/${sessionId}`, {
+      const response = await fetch(`${API_BASE}/session/${sessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -67,7 +68,7 @@ export default function EditDetailsModal({
       const saved = await response.json();
 
       // Trigger fresh chart calculation right away
-      await fetch(`/api/session/${sessionId}/recalculate-kundli`, { method: 'POST' });
+      await fetch(`${API_BASE}/session/${sessionId}/recalculate-kundli`, { method: 'POST' });
 
       onSaved({
         dob: saved.dob,

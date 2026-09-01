@@ -10,6 +10,17 @@ from app.utils.logger import logger
 router = APIRouter(prefix="/session", tags=["Session"])
 
 
+@router.get("/profiles/all")
+async def get_all_profiles():
+    """Returns all profiles saved in database so frontend can restore and sync charts."""
+    try:
+        profiles = db.get_all_valid_profiles()
+        return {"profiles": profiles}
+    except Exception as e:
+        logger.error(f"Error fetching all profiles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(session_id: str):
     try:

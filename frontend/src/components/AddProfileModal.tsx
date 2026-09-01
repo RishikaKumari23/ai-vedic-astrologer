@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { UserPlus, Sparkles, X } from 'lucide-react';
 import { Profile } from './ProfileSwitcher';
+import { API_BASE } from '../api';
 
 interface AddProfileModalProps {
   onClose: () => void;
@@ -61,7 +62,7 @@ export default function AddProfileModal({ onClose, onProfileAdded }: AddProfileM
       };
 
       // 1. Initialize session and save profile in backend database
-      const res = await fetch(`/api/session/${newSessionId}`, {
+      const res = await fetch(`${API_BASE}/session/${newSessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -72,7 +73,7 @@ export default function AddProfileModal({ onClose, onProfileAdded }: AddProfileM
       }
 
       // 2. Trigger Kundli and Dasha calculations for this new chart
-      await fetch(`/api/session/${newSessionId}/recalculate-kundli`, {
+      await fetch(`${API_BASE}/session/${newSessionId}/recalculate-kundli`, {
         method: 'POST',
       });
 
