@@ -42,6 +42,11 @@ async def get_kundli_chart(session_id: str):
     try:
         session = db.get_or_create_session(session_id)
         raw = session.get("kundli_raw")
+        if not raw and session.get("dob") and session.get("birth_place"):
+            from app.services.chat_service import chat_service
+            chat_service._fetch_and_cache_kundli(session_id, session)
+            session = db.get_or_create_session(session_id)
+            raw = session.get("kundli_raw")
         if not raw:
             return {"available": False, "planets": [], "ascendant_sign": None}
         parsed = json.loads(raw)
