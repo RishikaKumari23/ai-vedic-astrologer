@@ -17,7 +17,7 @@ async def get_session_info(session_id: str):
         return SessionInfoResponse(
             session_id=session["session_id"], dob=session.get("dob"),
             birth_time=session.get("birth_time"), birth_place=session.get("birth_place"),
-            gender=session.get("gender"), name=session.get("name"),
+            gender=session.get("gender"), name=session.get("name"), relation=session.get("relation", "Self"),
             latitude=session.get("latitude"), longitude=session.get("longitude"),
             language=session.get("language", "Hinglish"), updated_at=session.get("updated_at")
         )
@@ -199,7 +199,7 @@ async def update_session_info(session_id: str, profile_update: dict):
         return SessionInfoResponse(
             session_id=updated["session_id"], dob=updated.get("dob"),
             birth_time=updated.get("birth_time"), birth_place=updated.get("birth_place"),
-            gender=updated.get("gender"), name=updated.get("name"),
+            gender=updated.get("gender"), name=updated.get("name"), relation=updated.get("relation", "Self"),
             latitude=updated.get("latitude"), longitude=updated.get("longitude"),
             language=updated.get("language", "Hinglish"), updated_at=updated.get("updated_at")
         )

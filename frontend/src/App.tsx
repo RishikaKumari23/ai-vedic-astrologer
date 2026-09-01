@@ -1,4 +1,4 @@
-import  { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
 import { ProfileCard } from './components/ProfileCard';
@@ -7,6 +7,8 @@ import OnboardingForm from './components/OnboardingForm';
 import KundliChartToggle from './components/KundliChartToggle';
 import LifeDashboard from './components/LifeDashboard';
 import EditDetailsModal from './components/EditDetailsModal';
+import AddProfileModal from './components/AddProfileModal';
+import ProfileSwitcher, { Profile } from './components/ProfileSwitcher';
 import GoToChatCard from './components/GoToChatCard';
 import WeeklyGuidance from './components/WeeklyGuidance';
 import FaqStarter from './components/FaqStarter';
@@ -25,11 +27,13 @@ const GREETINGS: Record<string, (name: string) => string> = {
 
 function App() {
   const [sessionId, setSessionId] = useState<string>('');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [onboarded, setOnboarded] = useState<boolean>(false);
   const [checkingProfile, setCheckingProfile] = useState<boolean>(true);
   const [view, setView] = useState<'dashboard' | 'chat'>('dashboard');
 
   const [name, setName] = useState<string | null>(null);
+  const [relation, setRelation] = useState<string>('Self');
   const [messages, setMessages] = useState<Message[]>([]);
   const [dob, setDob] = useState<string | null>(null);
   const [birthTime, setBirthTime] = useState<string | null>(null);
@@ -43,36 +47,106 @@ function App() {
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showAddProfileModal, setShowAddProfileModal] = useState(false);
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ indexing_completed: false, total_chunks: 0, loading: true });
 
+  // 1. Initialize session and load saved profiles from localStorage
   useEffect(() => {
+    let savedProfilesStr = localStorage.getItem('call-astro_profiles');
+    let loadedProfiles: Profile[] = [];
+    if (savedProfilesStr) {
+      try {
+        loadedProfiles = JSON.parse(savedProfilesStr);
+      } catch (e) {
+        console.error('Failed to parse saved profiles:', e);
+      }
+    }
+
     let sid = localStorage.getItem('call-astro_session_id');
     if (!sid) {
-      sid = 'session_' + Math.random().toString(36).substring(2, 15);
+      if (loadedProfiles.length > 0) {
+        sid = loadedProfiles[0].id;
+      } else {
+        sid = 'session_' + Math.random().toString(36).substring(2, 15);
+      }
       localStorage.setItem('call-astro_session_id', sid);
     }
+
     setSessionId(sid);
+    setProfiles(loadedProfiles);
   }, []);
 
+  // 2. Fetch active session data whenever sessionId changes
   useEffect(() => {
     if (!sessionId) return;
     const fetchSessionData = async () => {
       try {
+        setCheckingProfile(true);
         const profileRes = await fetch(`${API_BASE}/session/${sessionId}`);
         if (profileRes.ok) {
           const profile = await profileRes.json();
           setName(profile.name);
+          setRelation(profile.relation || 'Self');
           setDob(profile.dob);
           setBirthTime(profile.birth_time);
           setBirthPlace(profile.birth_place);
-          setLanguage(profile.language);
-          if (profile.dob && profile.birth_time && profile.birth_place) setOnboarded(true);
+          setLanguage(profile.language || 'Hinglish');
+
+          const hasBirthDetails = Boolean(profile.dob && profile.birth_time && profile.birth_place);
+          setOnboarded(hasBirthDetails);
+
+          // Sync into profiles registry
+          setProfiles(prevProfiles => {
+            const index = prevProfiles.findIndex(p => p.id === sessionId);
+            let updated: Profile[];
+            if (index >= 0) {
+              updated = [...prevProfiles];
+              updated[index] = {
+                ...updated[index],
+                name: profile.name || updated[index].name,
+                relation: profile.relation || updated[index].relation || 'Self',
+                dob: profile.dob,
+                birth_time: profile.birth_time,
+                birth_place: profile.birth_place,
+                language: profile.language || 'Hinglish',
+              };
+            } else {
+              const isFirst = prevProfiles.length === 0;
+              const newEntry: Profile = {
+                id: sessionId,
+                name: profile.name || 'My Profile',
+                relation: profile.relation || 'Self',
+                dob: profile.dob,
+                birth_time: profile.birth_time,
+                birth_place: profile.birth_place,
+                language: profile.language || 'Hinglish',
+                isPrimary: isFirst,
+              };
+              updated = [...prevProfiles, newEntry];
+            }
+            localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+            return updated;
+          });
         }
+
         const historyRes = await fetch(`${API_BASE}/chat/history/${sessionId}`);
         if (historyRes.ok) {
           const history = await historyRes.json();
-          setMessages(history.messages);
+          setMessages(history.messages || []);
+        }
+
+        // Fetch Kundli chart for this profile
+        const chartRes = await fetch(`${API_BASE}/session/${sessionId}/kundli-chart`);
+        if (chartRes.ok) {
+          const chartData = await chartRes.json();
+          if (chartData.available) {
+            setKundliPlanets(chartData.planets);
+            setAscendantSign(chartData.ascendant_sign);
+          } else {
+            setKundliPlanets(null);
+            setAscendantSign(null);
+          }
         }
       } catch (err) {
         console.error('Error fetching session data:', err);
@@ -81,22 +155,10 @@ function App() {
         setCheckingProfile(false);
       }
     };
+
     fetchSessionData();
     checkIngestStatus();
   }, [sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    fetch(`${API_BASE}/session/${sessionId}/kundli-chart`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.available) {
-          setKundliPlanets(data.planets);
-          setAscendantSign(data.ascendant_sign);
-        }
-      })
-      .catch((err) => console.error('Failed to load kundli chart:', err));
-  }, [sessionId, messages.length]);
 
   const checkIngestStatus = async () => {
     try {
@@ -108,6 +170,60 @@ function App() {
     } catch (err) {
       console.error('Error checking ingest status:', err);
       setIngestStatus(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // Switch to another profile
+  const handleSelectProfile = (id: string) => {
+    if (id === sessionId) return;
+    setSessionId(id);
+    localStorage.setItem('call-astro_session_id', id);
+    setMessages([]);
+    setKundliPlanets(null);
+    setAscendantSign(null);
+    setSuggestions([]);
+    setError(null);
+  };
+
+  // Add new profile
+  const handleProfileAdded = (newProfile: Profile) => {
+    setProfiles(prev => {
+      const updated = [...prev, newProfile];
+      localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+      return updated;
+    });
+    setSessionId(newProfile.id);
+    localStorage.setItem('call-astro_session_id', newProfile.id);
+    setMessages([]);
+    setKundliPlanets(null);
+    setAscendantSign(null);
+    setSuggestions([]);
+    setOnboarded(true);
+  };
+
+  // Delete profile
+  const handleDeleteProfile = async (id: string) => {
+    try {
+      await fetch(`${API_BASE}/session/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error('Failed to delete backend session:', e);
+    }
+
+    const updated = profiles.filter(p => p.id !== id);
+    setProfiles(updated);
+    localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+
+    if (id === sessionId) {
+      const nextProfile = updated.find(p => p.isPrimary) || updated[0];
+      if (nextProfile) {
+        setSessionId(nextProfile.id);
+        localStorage.setItem('call-astro_session_id', nextProfile.id);
+      } else {
+        const newSid = 'session_' + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem('call-astro_session_id', newSid);
+        setSessionId(newSid);
+        setOnboarded(false);
+      }
     }
   };
 
@@ -184,17 +300,13 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/session/${sessionId}`, { method: 'DELETE' });
       if (res.ok) {
-        const newSid = 'session_' + Math.random().toString(36).substring(2, 15);
-        localStorage.setItem('call-astro_session_id', newSid);
-        setSessionId(newSid);
         setMessages([]);
-        setName(null);
-        setDob(null);
-        setBirthTime(null);
-        setBirthPlace(null);
-        setLanguage('Hinglish');
-        setOnboarded(false);
-        setView('dashboard');
+        const chartRes = await fetch(`${API_BASE}/session/${sessionId}/kundli-chart`);
+        if (chartRes.ok) {
+          const chartData = await chartRes.json();
+          setKundliPlanets(chartData.available ? chartData.planets : null);
+          setAscendantSign(chartData.available ? chartData.ascendant_sign : null);
+        }
       }
     } catch (err) {
       console.error('Reset failed:', err);
@@ -210,12 +322,26 @@ function App() {
     setBirthTime(profile.birth_time);
     setBirthPlace(profile.birth_place);
     setLanguage(profile.language);
+    setRelation('Self');
     setOnboarded(true);
     setView('dashboard');
+
+    const updatedProfile: Profile = {
+      id: sessionId,
+      name: profile.name,
+      relation: 'Self',
+      dob: profile.dob,
+      birth_time: profile.birth_time,
+      birth_place: profile.birth_place,
+      language: profile.language,
+      isPrimary: true,
+    };
+    setProfiles([updatedProfile]);
+    localStorage.setItem('call-astro_profiles', JSON.stringify([updatedProfile]));
   };
 
-  if (checkingProfile) {
-    return <div className="flex h-screen items-center justify-center text-slate-400">Loading...</div>;
+  if (checkingProfile && !name) {
+    return <div className="flex h-screen items-center justify-center text-slate-400 font-medium">Loading astrological chart...</div>;
   }
 
   if (!onboarded) {
@@ -225,14 +351,14 @@ function App() {
   const exportChat = () => {
     if (messages.length === 0) return;
     const textData = messages.map(msg => {
-      const role = msg.role === 'user' ? 'You' : 'Astrologer';
+      const role = msg.role === 'user' ? (name || 'You') : 'Astrologer';
       return `[${msg.timestamp || new Date().toISOString()}] ${role}:\n${msg.content}\n`;
     }).join('\n');
     const blob = new Blob([textData], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Call-Astro_Chat_Export.txt';
+    a.download = `Call-Astro_${name || 'Chat'}_Export.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -240,7 +366,7 @@ function App() {
   };
 
   const clearChat = async () => {
-    if (!confirm('Are you sure you want to clear your chat history?')) return;
+    if (!confirm(`Are you sure you want to clear chat history for ${name || 'this profile'}?`)) return;
     try {
       const res = await fetch(`${API_BASE}/chat/history/${sessionId}`, {
         method: 'DELETE',
@@ -262,12 +388,24 @@ function App() {
     return (
       <div className="flex flex-col h-full bg-slate-50">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-3">
             <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
             <div>
               <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
               <p className="text-[10px] text-slate-400 font-medium mt-0.5">{greeting || 'Your Dashboard'}</p>
             </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {profiles.length > 0 && (
+              <ProfileSwitcher
+                profiles={profiles}
+                activeProfileId={sessionId}
+                onSelectProfile={handleSelectProfile}
+                onAddProfileClick={() => setShowAddProfileModal(true)}
+                onDeleteProfile={handleDeleteProfile}
+              />
+            )}
           </div>
         </header>
 
@@ -275,7 +413,7 @@ function App() {
           <div className="max-w-6xl mx-auto space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
               <ProfileCard
-                dob={dob} birthTime={birthTime} birthPlace={birthPlace} language={language}
+                name={name} relation={relation} dob={dob} birthTime={birthTime} birthPlace={birthPlace} language={language}
                 onReset={handleResetSession} onEdit={() => setShowEditModal(true)} isResetting={isResetting}
               />
               {kundliPlanets && ascendantSign ? (
@@ -294,21 +432,30 @@ function App() {
 
         {showEditModal && (
           <EditDetailsModal
-            sessionId={sessionId} currentName={name} currentDob={dob}
+            sessionId={sessionId} currentName={name} currentRelation={relation} currentDob={dob}
             currentBirthTime={birthTime} currentBirthPlace={birthPlace} currentLanguage={language}
             onClose={() => setShowEditModal(false)}
             onSaved={async (profile) => {
               setName(profile.name);
+              setRelation(profile.relation || 'Self');
               setDob(profile.dob);
               setBirthTime(profile.birth_time);
               setBirthPlace(profile.birth_place);
               setLanguage(profile.language);
               setKundliPlanets(null);
               setAscendantSign(null);
+
+              // Update profiles list in state & localStorage
+              setProfiles(prev => {
+                const updated = prev.map(p => p.id === sessionId ? { ...p, ...profile } : p);
+                localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+                return updated;
+              });
+
               const historyRes = await fetch(`${API_BASE}/chat/history/${sessionId}`);
               if (historyRes.ok) {
                 const history = await historyRes.json();
-                setMessages(history.messages);
+                setMessages(history.messages || []);
               }
               const chartRes = await fetch(`${API_BASE}/session/${sessionId}/kundli-chart`);
               if (chartRes.ok) {
@@ -319,6 +466,13 @@ function App() {
                 }
               }
             }}
+          />
+        )}
+
+        {showAddProfileModal && (
+          <AddProfileModal
+            onClose={() => setShowAddProfileModal(false)}
+            onProfileAdded={handleProfileAdded}
           />
         )}
       </div>
@@ -338,10 +492,24 @@ function App() {
         <button onClick={() => setView('dashboard')} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition">
           <ArrowLeft size={16} /> Dashboard
         </button>
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
-          <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={16} /></div>
+            <h1 className="text-base font-bold text-slate-800 leading-none hidden sm:block">Call-Astro</h1>
+          </div>
+
+          {profiles.length > 0 && (
+            <ProfileSwitcher
+              profiles={profiles}
+              activeProfileId={sessionId}
+              onSelectProfile={handleSelectProfile}
+              onAddProfileClick={() => setShowAddProfileModal(true)}
+              onDeleteProfile={handleDeleteProfile}
+            />
+          )}
         </div>
+
         <div className="flex items-center gap-2">
           <button onClick={exportChat} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition" title="Export Chat">
             <Download size={18} />
@@ -377,11 +545,17 @@ function App() {
           <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
         </main>
         <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
-         <WeeklyGuidance sessionId={sessionId} />
-         <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
+          <WeeklyGuidance sessionId={sessionId} />
+          <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
         </aside>
-
       </div>
+
+      {showAddProfileModal && (
+        <AddProfileModal
+          onClose={() => setShowAddProfileModal(false)}
+          onProfileAdded={handleProfileAdded}
+        />
+      )}
     </div>
   );
 }
