@@ -87,13 +87,23 @@ function App() {
         console.error('Failed to sync backend profiles:', err);
       }
 
-      // Ensure at least one profile is marked isPrimary
+      // Deduplicate by name and dob so legacy test sessions don't clutter the dropdown
+      const uniqueMap = new Map<string, Profile>();
+      savedProfiles.forEach(p => {
+        const key = `${p.name?.toLowerCase().trim()}_${p.dob}`;
+        if (!uniqueMap.has(key) || p.id === 'session_0m4d80l5hrf9') {
+          uniqueMap.set(key, p);
+        }
+      });
+      savedProfiles = Array.from(uniqueMap.values());
+
+      // Ensure Rishika is marked isPrimary
       if (savedProfiles.length > 0) {
-        const hasPrimary = savedProfiles.some(p => p.isPrimary);
-        if (!hasPrimary) {
-          const rishika = savedProfiles.find(p => p.name?.toLowerCase() === 'rishika');
-          if (rishika) rishika.isPrimary = true;
-          else savedProfiles[0].isPrimary = true;
+        const rishika = savedProfiles.find(p => p.id === 'session_0m4d80l5hrf9' || p.name?.toLowerCase() === 'rishika');
+        if (rishika) {
+          savedProfiles.forEach(p => p.isPrimary = (p.id === rishika.id));
+        } else {
+          savedProfiles[0].isPrimary = true;
         }
       }
 
