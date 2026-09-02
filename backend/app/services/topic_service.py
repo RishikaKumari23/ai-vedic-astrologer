@@ -597,6 +597,7 @@ def build_reasoning_trace(
     rag_sources: Optional[List[Dict[str, Any]]] = None,
     evidence_vote: Optional[Dict] = None,
     topic_result: Optional[Any] = None,
+    gochar_data: Optional[Dict] = None,
     **kwargs,
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
@@ -640,6 +641,18 @@ def build_reasoning_trace(
         if antar:
             detail += f", Antardasha: {antar.get('lord', 'Unknown')}"
         steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
+        step_num += 1
+
+    if gochar_data and gochar_data.get("available"):
+        sade_sati = gochar_data.get("sade_sati", {})
+        ss_status = sade_sati.get("status", "Inactive")
+        highlights = gochar_data.get("highlights", [])
+        h_text = " | ".join(highlights[:2]) if highlights else "Planetary transits mapped."
+        steps.append({
+            "step": step_num,
+            "title": "Real-Time Planetary Transits (Gochar)",
+            "detail": f"Sade Sati: {ss_status}. {h_text}"
+        })
         step_num += 1
 
     config = TOPIC_CHART_FACTORS.get(topic, {})

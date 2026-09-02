@@ -23,6 +23,7 @@ from app.services.topic_service import (
 from app.services.hybrid_router import route_topic
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
+from app.services.transit_service import transit_service
 
 
 class ChatService:
@@ -413,8 +414,8 @@ class ChatService:
         return session.get("yoga_text") or ""
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
-                                   yoga_text: str, missing_evidence: str = "") -> str:
-        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
+                                   yoga_text: str, missing_evidence: str = "", gochar_text: str = "") -> str:
+        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, gochar_text, missing_evidence] if p]
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
@@ -598,7 +599,9 @@ class ChatService:
                     missing_evidence = bundle["missing_evidence"]
                     evidence_vote = bundle.get("evidence_vote")
 
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
+            gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, gochar_text)
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
             try:
@@ -797,7 +800,9 @@ class ChatService:
                     missing_evidence = bundle["missing_evidence"]
                     evidence_vote = bundle.get("evidence_vote")
 
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
+            gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, gochar_text)
 
             user_memory = ""
             repeat_hint = ""
@@ -912,10 +917,12 @@ class ChatService:
 
             topic_cache = self._get_topic_cache(session, topic)
             evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
+            gochar_data = transit_service.calculate_gochar_overlay(session)
 
             return build_reasoning_trace(
                 topic, ascendant_sign, planets, dasha_info, consistency_check,
-                rag_hits_sources, evidence_vote, topic_result=topic_result
+                rag_hits_sources, evidence_vote, topic_result=topic_result,
+                gochar_data=gochar_data
             )
         except Exception as e:
             logger.error(f"Reasoning trace build failed: {e}")

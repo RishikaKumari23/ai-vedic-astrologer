@@ -5,6 +5,7 @@ from app.models.schemas import SessionInfoResponse
 from app.memory.database import db
 from app.services.geocoding_service import geocoding_service
 from app.services.dashboard_service import get_lucky_color, generate_daily_prediction, generate_weekly_guidance
+from app.services.transit_service import transit_service
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/session", tags=["Session"])
@@ -18,6 +19,44 @@ async def get_all_profiles():
         return {"profiles": profiles}
     except Exception as e:
         logger.error(f"Error fetching all profiles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/transits/live")
+async def get_live_transits():
+    """Returns real-time sky planetary positions and multi-profile transit overlays."""
+    try:
+        current_transits = transit_service.get_current_transits()
+        profiles = db.get_all_valid_profiles()
+        
+        multi_overlays = []
+        for p in profiles:
+            sid = p.get("session_id")
+            s = db.get_or_create_session(sid)
+            overlay = transit_service.calculate_gochar_overlay(s, current_transits)
+            if overlay.get("available"):
+                multi_overlays.append(overlay)
+
+        return {
+            "date": current_transits.get("date"),
+            "sky_planets": current_transits.get("planets", []),
+            "overlays": multi_overlays
+        }
+    except Exception as e:
+        logger.error(f"Error fetching live transits: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{session_id}/transits")
+async def get_session_transits(session_id: str):
+    """Returns real-time Gochar transit overlay for a specific session/chart."""
+    try:
+        session = db.get_or_create_session(session_id)
+        current_transits = transit_service.get_current_transits()
+        overlay = transit_service.calculate_gochar_overlay(session, current_transits)
+        return overlay
+    except Exception as e:
+        logger.error(f"Error calculating session transits: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

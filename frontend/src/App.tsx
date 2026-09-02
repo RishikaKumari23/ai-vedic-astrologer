@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
 import { ProfileCard } from './components/ProfileCard';
-import { Sparkles, Database, CheckCircle, ArrowLeft, Download, Trash2 } from 'lucide-react';
+import { Sparkles, Database, CheckCircle, ArrowLeft, Download, Trash2, Globe2, Compass } from 'lucide-react';
 import OnboardingForm from './components/OnboardingForm';
 import KundliChartToggle from './components/KundliChartToggle';
 import LifeDashboard from './components/LifeDashboard';
 import EditDetailsModal from './components/EditDetailsModal';
 import AddProfileModal from './components/AddProfileModal';
 import ProfileSwitcher, { Profile } from './components/ProfileSwitcher';
+import TransitOverlayModal from './components/TransitOverlayModal';
 import GoToChatCard from './components/GoToChatCard';
 import WeeklyGuidance from './components/WeeklyGuidance';
 import FaqStarter from './components/FaqStarter';
@@ -47,6 +48,7 @@ function App() {
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [profileToEdit, setProfileToEdit] = useState<Profile | null>(null);
   const [showAddProfileModal, setShowAddProfileModal] = useState(false);
+  const [showTransitModal, setShowTransitModal] = useState(false);
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ indexing_completed: false, total_chunks: 0, loading: true });
 
@@ -486,7 +488,17 @@ function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowTransitModal(true)}
+                className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 px-3 py-1.5 rounded-full text-xs font-semibold transition shadow-2xs active:scale-95"
+                title="View Real-Time Planetary Transits (Gochar)"
+              >
+                <Globe2 size={13} className="text-indigo-600" />
+                <span>Live Transits (Gochar)</span>
+              </button>
+
               {profiles.length > 0 && (
                 <ProfileSwitcher
                   profiles={profiles}
@@ -533,6 +545,37 @@ function App() {
                 <LifeDashboard sessionId={sessionId} language={language} />
               </div>
 
+              {/* Live Transits Quick Action Banner */}
+              <div
+                onClick={() => setShowTransitModal(true)}
+                className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-4 sm:p-5 text-white shadow-sm border border-slate-800 flex items-center justify-between cursor-pointer hover:border-amber-400/50 transition-all group"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Compass size={22} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">Live Planetary Transits (Gochar Overlay)</h3>
+                      <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full font-medium border border-amber-400/30">
+                        Real-Time
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Check how current movements of Saturn, Jupiter & Rahu affect {name || 'you'} and all saved family charts.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="hidden sm:flex items-center gap-1.5 text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-3.5 py-2 rounded-xl transition border border-white/10 shrink-0"
+                >
+                  <span>Open Overlay</span>
+                  <Globe2 size={13} className="text-amber-400" />
+                </button>
+              </div>
+
               <GoToChatCard language={language} onGoToChat={() => setView('chat')} />
             </div>
           </div>
@@ -556,6 +599,16 @@ function App() {
                 <div className="p-1.5 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={16} /></div>
                 <h1 className="text-base font-bold text-slate-800 leading-none hidden sm:block">Call-Astro</h1>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setShowTransitModal(true)}
+                className="hidden sm:flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 px-2.5 py-1 rounded-full text-xs font-semibold transition"
+                title="View Real-Time Planetary Transits"
+              >
+                <Globe2 size={12} className="text-indigo-600" />
+                <span>Gochar</span>
+              </button>
 
               {profiles.length > 0 && (
                 <ProfileSwitcher
@@ -684,6 +737,18 @@ function App() {
         <AddProfileModal
           onClose={() => setShowAddProfileModal(false)}
           onProfileAdded={handleProfileAdded}
+        />
+      )}
+
+      {showTransitModal && (
+        <TransitOverlayModal
+          profiles={profiles}
+          activeProfileId={sessionId}
+          onClose={() => setShowTransitModal(false)}
+          onAskAboutTransit={(question) => {
+            setView('chat');
+            handleSendMessage(question);
+          }}
         />
       )}
     </div>
