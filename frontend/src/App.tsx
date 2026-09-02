@@ -37,7 +37,7 @@ function App() {
   const [dob, setDob] = useState<string | null>(null);
   const [birthTime, setBirthTime] = useState<string | null>(null);
   const [birthPlace, setBirthPlace] = useState<string | null>(null);
-  const [language, setLanguage] = useState<string>('Hinglish');
+  const [language, setLanguage] = useState<string>('English');
 
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [isResetting, setIsResetting] = useState<boolean>(false);
@@ -45,7 +45,7 @@ function App() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [profileToEdit, setProfileToEdit] = useState<Profile | null>(null);
   const [showAddProfileModal, setShowAddProfileModal] = useState(false);
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ indexing_completed: false, total_chunks: 0, loading: true });
@@ -67,8 +67,19 @@ function App() {
           const backendProfiles: any[] = data.profiles || [];
           
           backendProfiles.forEach(bp => {
-            const exists = savedProfiles.some(p => p.id === bp.session_id);
-            if (!exists) {
+            const index = savedProfiles.findIndex(p => p.id === bp.session_id);
+            if (index >= 0) {
+              savedProfiles[index] = {
+                ...savedProfiles[index],
+                name: bp.name || savedProfiles[index].name,
+                relation: bp.relation || savedProfiles[index].relation || 'Self',
+                dob: bp.dob,
+                birth_time: bp.birth_time,
+                birth_place: bp.birth_place,
+                gender: bp.gender,
+                language: bp.language || 'English',
+              };
+            } else {
               savedProfiles.push({
                 id: bp.session_id,
                 name: bp.name || 'User',
@@ -77,7 +88,7 @@ function App() {
                 birth_time: bp.birth_time,
                 birth_place: bp.birth_place,
                 gender: bp.gender,
-                language: bp.language || 'Hinglish',
+                language: bp.language || 'English',
                 isPrimary: bp.name === 'Rishika' || bp.relation === 'Self',
               });
             }
@@ -97,13 +108,16 @@ function App() {
       });
       savedProfiles = Array.from(uniqueMap.values());
 
-      // Ensure Rishika is marked isPrimary
+      // Ensure at least one profile is marked isPrimary
       if (savedProfiles.length > 0) {
-        const rishika = savedProfiles.find(p => p.id === 'session_0m4d80l5hrf9' || p.name?.toLowerCase() === 'rishika');
-        if (rishika) {
-          savedProfiles.forEach(p => p.isPrimary = (p.id === rishika.id));
-        } else {
-          savedProfiles[0].isPrimary = true;
+        const hasPrimary = savedProfiles.some(p => p.isPrimary);
+        if (!hasPrimary) {
+          const rishika = savedProfiles.find(p => p.id === 'session_0m4d80l5hrf9' || p.name?.toLowerCase() === 'rishika');
+          if (rishika) {
+            savedProfiles.forEach(p => p.isPrimary = (p.id === rishika.id));
+          } else {
+            savedProfiles[0].isPrimary = true;
+          }
         }
       }
 
@@ -137,7 +151,7 @@ function App() {
           setDob(profile.dob);
           setBirthTime(profile.birth_time);
           setBirthPlace(profile.birth_place);
-          setLanguage(profile.language || 'Hinglish');
+          setLanguage(profile.language || 'English');
 
           const hasDetails = Boolean(profile.dob && profile.birth_time && profile.birth_place);
           setOnboarded(hasDetails);
@@ -155,7 +169,7 @@ function App() {
                   dob: profile.dob,
                   birth_time: profile.birth_time,
                   birth_place: profile.birth_place,
-                  language: profile.language || 'Hinglish',
+                  language: profile.language || 'English',
                 } : p);
               } else {
                 const newP: Profile = {
@@ -165,7 +179,7 @@ function App() {
                   dob: profile.dob,
                   birth_time: profile.birth_time,
                   birth_place: profile.birth_place,
-                  language: profile.language || 'Hinglish',
+                  language: profile.language || 'English',
                   isPrimary: prev.length === 0,
                 };
                 updated = [...prev, newP];
@@ -229,7 +243,7 @@ function App() {
       setDob(target.dob || null);
       setBirthTime(target.birth_time || null);
       setBirthPlace(target.birth_place || null);
-      setLanguage(target.language || 'Hinglish');
+      setLanguage(target.language || 'English');
       setOnboarded(Boolean(target.dob && target.birth_time && target.birth_place));
     }
     setSessionId(id);
@@ -239,6 +253,7 @@ function App() {
     setAscendantSign(null);
     setSuggestions([]);
     setError(null);
+    setTraceRefreshKey(prev => prev + 1);
   };
 
   // Add new profile
@@ -253,7 +268,7 @@ function App() {
     setDob(newProfile.dob || null);
     setBirthTime(newProfile.birth_time || null);
     setBirthPlace(newProfile.birth_place || null);
-    setLanguage(newProfile.language || 'Hinglish');
+    setLanguage(newProfile.language || 'English');
     setOnboarded(true);
     setSessionId(newProfile.id);
     localStorage.setItem('call-astro_session_id', newProfile.id);
@@ -261,6 +276,7 @@ function App() {
     setKundliPlanets(null);
     setAscendantSign(null);
     setSuggestions([]);
+    setTraceRefreshKey(prev => prev + 1);
     setView('dashboard');
   };
 
@@ -453,76 +469,195 @@ function App() {
     }
   };
 
-  if (view === 'dashboard') {
-    const greetingFn = GREETINGS[language] || GREETINGS.Hinglish;
-    const greeting = name ? greetingFn(name) : '';
+  const activeProfile = profiles.find(p => p.id === sessionId);
 
-    return (
-      <div className="flex flex-col h-full bg-slate-50">
-        <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
-            <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
-              <p className="text-[10px] text-slate-400 font-medium mt-0.5">{greeting || 'Your Dashboard'}</p>
+  return (
+    <div className="flex flex-col h-full bg-slate-50">
+      {view === 'dashboard' ? (
+        <div className="flex flex-col h-full bg-slate-50">
+          <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
+              <div>
+                <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                  {name ? (GREETINGS[language] || GREETINGS.English)(name) : 'Your Dashboard'}
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            {profiles.length > 0 && (
-              <ProfileSwitcher
-                profiles={profiles}
-                activeProfileId={sessionId}
-                onSelectProfile={handleSelectProfile}
-                onAddProfileClick={() => setShowAddProfileModal(true)}
-                onDeleteProfile={handleDeleteProfile}
-              />
-            )}
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-6xl mx-auto space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-              <ProfileCard
-                name={name} relation={relation} dob={dob} birthTime={birthTime} birthPlace={birthPlace} language={language}
-                onReset={handleResetSession} onEdit={() => setShowEditModal(true)} isResetting={isResetting}
-              />
-              {kundliPlanets && ascendantSign ? (
-                <KundliChartToggle planets={kundliPlanets} ascendantSign={ascendantSign} language={language} />
-              ) : (
-                <div className="w-full bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-center text-sm text-slate-400 h-full">
-                  Chart loading...
-                </div>
+            <div className="flex items-center gap-3">
+              {profiles.length > 0 && (
+                <ProfileSwitcher
+                  profiles={profiles}
+                  activeProfileId={sessionId}
+                  onSelectProfile={handleSelectProfile}
+                  onAddProfileClick={() => setShowAddProfileModal(true)}
+                  onEditProfile={(p) => setProfileToEdit(p)}
+                  onDeleteProfile={handleDeleteProfile}
+                />
               )}
-              <LifeDashboard sessionId={sessionId} language={language} />
             </div>
+          </header>
 
-            <GoToChatCard language={language} onGoToChat={() => setView('chat')} />
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-6xl mx-auto space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+                <ProfileCard
+                  name={name}
+                  relation={relation}
+                  dob={dob}
+                  birthTime={birthTime}
+                  birthPlace={birthPlace}
+                  language={language}
+                  onReset={handleResetSession}
+                  onEdit={() => setProfileToEdit(activeProfile || {
+                    id: sessionId,
+                    name: name || 'User',
+                    relation: relation || 'Self',
+                    dob,
+                    birth_time: birthTime,
+                    birth_place: birthPlace,
+                    language,
+                    isPrimary: true,
+                  })}
+                  isResetting={isResetting}
+                />
+                {kundliPlanets && ascendantSign ? (
+                  <KundliChartToggle planets={kundliPlanets} ascendantSign={ascendantSign} language={language} />
+                ) : (
+                  <div className="w-full bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-center text-sm text-slate-400 h-full">
+                    Chart loading...
+                  </div>
+                )}
+                <LifeDashboard sessionId={sessionId} language={language} />
+              </div>
+
+              <GoToChatCard language={language} onGoToChat={() => setView('chat')} />
+            </div>
           </div>
         </div>
+      ) : (
+        <div className="flex flex-col h-full bg-slate-50">
+          {!ingestStatus.loading && !ingestStatus.indexing_completed && (
+            <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-sm text-blue-700 flex items-center gap-2">
+              <Database size={16} className="text-blue-600 shrink-0 animate-pulse" />
+              <span><strong>Knowledge base indexing...</strong> Automatic indexing completed on server startup.</span>
+            </div>
+          )}
 
-        {showEditModal && (
-          <EditDetailsModal
-            sessionId={sessionId} currentName={name} currentRelation={relation} currentDob={dob}
-            currentBirthTime={birthTime} currentBirthPlace={birthPlace} currentLanguage={language}
-            onClose={() => setShowEditModal(false)}
-            onSaved={async (profile) => {
-              setName(profile.name);
-              setRelation(profile.relation || 'Self');
-              setDob(profile.dob);
-              setBirthTime(profile.birth_time);
-              setBirthPlace(profile.birth_place);
-              setLanguage(profile.language);
+          <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
+            <button onClick={() => setView('dashboard')} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition">
+              <ArrowLeft size={16} /> Dashboard
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={16} /></div>
+                <h1 className="text-base font-bold text-slate-800 leading-none hidden sm:block">Call-Astro</h1>
+              </div>
+
+              {profiles.length > 0 && (
+                <ProfileSwitcher
+                  profiles={profiles}
+                  activeProfileId={sessionId}
+                  onSelectProfile={handleSelectProfile}
+                  onAddProfileClick={() => setShowAddProfileModal(true)}
+                  onEditProfile={(p) => setProfileToEdit(p)}
+                  onDeleteProfile={handleDeleteProfile}
+                />
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button onClick={exportChat} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition" title="Export Chat">
+                <Download size={18} />
+              </button>
+              <button onClick={clearChat} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Clear Chat">
+                <Trash2 size={18} />
+              </button>
+              <div className="hidden sm:flex items-center gap-2 border-l border-slate-200 pl-2 ml-1">
+                {ingestStatus.indexing_completed ? (
+                  <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full text-xs font-medium border border-emerald-100">
+                    <CheckCircle size={12} /><span>RAG Active: {ingestStatus.total_chunks} Chunks</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200">
+                    <Database size={12} /><span>RAG: Initializing</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {error && (
+            <div className="bg-rose-50 border-b border-rose-200 px-6 py-3 text-sm text-rose-700 flex items-center justify-between">
+              <span>{error}</span>
+              <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-600 font-semibold text-xs ml-4">Dismiss</button>
+            </div>
+          )}
+
+          <div className="flex-1 flex overflow-hidden">
+            <main className="flex-1 flex flex-col min-w-0 bg-slate-50">
+              <ChatWindow messages={messages} isTyping={isTyping} language={language} suggestions={suggestions} onSuggestionSelect={handleSendMessage} />
+              <FaqStarter onSelect={handleSendMessage} disabled={isTyping} language={language} />
+              <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
+            </main>
+            <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
+              <WeeklyGuidance sessionId={sessionId} />
+              <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
+            </aside>
+          </div>
+        </div>
+      )}
+
+      {profileToEdit && (
+        <EditDetailsModal
+          sessionId={profileToEdit.id}
+          currentName={profileToEdit.name}
+          currentRelation={profileToEdit.relation}
+          currentDob={profileToEdit.dob || null}
+          currentBirthTime={profileToEdit.birth_time || null}
+          currentBirthPlace={profileToEdit.birth_place || null}
+          currentLanguage={profileToEdit.language || 'English'}
+          currentIsPrimary={profileToEdit.isPrimary}
+          onClose={() => setProfileToEdit(null)}
+          onSaved={async (edited) => {
+            // Update profiles list
+            setProfiles(prev => {
+              const updated = prev.map(p => {
+                if (p.id === edited.id) {
+                  return {
+                    ...p,
+                    name: edited.name,
+                    relation: edited.relation,
+                    dob: edited.dob,
+                    birth_time: edited.birth_time,
+                    birth_place: edited.birth_place,
+                    language: edited.language,
+                    isPrimary: edited.isPrimary ?? p.isPrimary,
+                  };
+                }
+                // If this edited profile became primary, un-primary others
+                if (edited.isPrimary) {
+                  return { ...p, isPrimary: false };
+                }
+                return p;
+              });
+              localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
+              return updated;
+            });
+
+            // If active profile was updated, refresh live state
+            if (edited.id === sessionId) {
+              setName(edited.name);
+              setRelation(edited.relation);
+              setDob(edited.dob);
+              setBirthTime(edited.birth_time);
+              setBirthPlace(edited.birth_place);
+              setLanguage(edited.language);
               setKundliPlanets(null);
               setAscendantSign(null);
-
-              // Update profiles list in state & localStorage
-              setProfiles(prev => {
-                const updated = prev.map(p => p.id === sessionId ? { ...p, ...profile } : p);
-                localStorage.setItem('call-astro_profiles', JSON.stringify(updated));
-                return updated;
-              });
 
               const historyRes = await fetch(`${API_BASE}/chat/history/${sessionId}`);
               if (historyRes.ok) {
@@ -537,90 +672,13 @@ function App() {
                   setAscendantSign(chartData.ascendant_sign);
                 }
               }
-            }}
-          />
-        )}
+              setTraceRefreshKey(prev => prev + 1);
+            }
 
-        {showAddProfileModal && (
-          <AddProfileModal
-            onClose={() => setShowAddProfileModal(false)}
-            onProfileAdded={handleProfileAdded}
-          />
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col h-full bg-slate-50">
-      {!ingestStatus.loading && !ingestStatus.indexing_completed && (
-        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-sm text-blue-700 flex items-center gap-2">
-          <Database size={16} className="text-blue-600 shrink-0 animate-pulse" />
-          <span><strong>Knowledge base indexing...</strong> Automatic indexing completed on server startup.</span>
-        </div>
+            setProfileToEdit(null);
+          }}
+        />
       )}
-
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
-        <button onClick={() => setView('dashboard')} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition">
-          <ArrowLeft size={16} /> Dashboard
-        </button>
-
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={16} /></div>
-            <h1 className="text-base font-bold text-slate-800 leading-none hidden sm:block">Call-Astro</h1>
-          </div>
-
-          {profiles.length > 0 && (
-            <ProfileSwitcher
-              profiles={profiles}
-              activeProfileId={sessionId}
-              onSelectProfile={handleSelectProfile}
-              onAddProfileClick={() => setShowAddProfileModal(true)}
-              onDeleteProfile={handleDeleteProfile}
-            />
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button onClick={exportChat} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition" title="Export Chat">
-            <Download size={18} />
-          </button>
-          <button onClick={clearChat} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Clear Chat">
-            <Trash2 size={18} />
-          </button>
-          <div className="hidden sm:flex items-center gap-2 border-l border-slate-200 pl-2 ml-1">
-            {ingestStatus.indexing_completed ? (
-              <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full text-xs font-medium border border-emerald-100">
-                <CheckCircle size={12} /><span>RAG Active: {ingestStatus.total_chunks} Chunks</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200">
-                <Database size={12} /><span>RAG: Initializing</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {error && (
-        <div className="bg-rose-50 border-b border-rose-200 px-6 py-3 text-sm text-rose-700 flex items-center justify-between">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-600 font-semibold text-xs ml-4">Dismiss</button>
-        </div>
-      )}
-
-      <div className="flex-1 flex overflow-hidden">
-        <main className="flex-1 flex flex-col min-w-0 bg-slate-50">
-          <ChatWindow messages={messages} isTyping={isTyping} language={language} suggestions={suggestions} onSuggestionSelect={handleSendMessage} />
-          <FaqStarter onSelect={handleSendMessage} disabled={isTyping} language={language} />
-          <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
-        </main>
-        <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
-          <WeeklyGuidance sessionId={sessionId} />
-          <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
-        </aside>
-      </div>
 
       {showAddProfileModal && (
         <AddProfileModal
