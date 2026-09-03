@@ -24,6 +24,7 @@ from app.services.hybrid_router import route_topic
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 from app.services.transit_service import transit_service
+from app.services.relationship_service import get_relationship_context
 
 
 class ChatService:
@@ -623,12 +624,14 @@ class ChatService:
                         f"do NOT ignore them or contradict them in your response):\n{cot_facts}"
                     )
 
+                rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     name=session.get("name") or "Friend",
                     language=language, dob=session.get("dob") or "Not provided",
                     birth_time=session.get("birth_time") or "Not provided",
                     birth_place=session.get("birth_place") or "Not provided",
                     current_date=current_date,
+                    relationship_guidance=rel_ctx["prompt_guidance"],
                     context=context_str or "No book context.", kundli_data=final_kundli_data,
                     user_memory=user_memory or "No prior topics discussed yet.",
                     consistency_note=consistency_note or "No specific conflict detected.",
@@ -824,12 +827,14 @@ class ChatService:
                     f"do NOT ignore them or contradict them in your response):\n{cot_facts}"
                 )
 
+            rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
                 current_date=current_date,
+                relationship_guidance=rel_ctx["prompt_guidance"],
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
                 user_memory=user_memory or "No prior topics discussed yet.",
                 consistency_note=consistency_note or "No specific conflict detected.",

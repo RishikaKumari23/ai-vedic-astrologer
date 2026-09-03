@@ -610,6 +610,14 @@ function App() {
                 <span>Gochar</span>
               </button>
 
+              {/* Relation context badge — shown when viewing a non-self profile */}
+              {relation && relation !== 'Self' && (
+                <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border bg-rose-50 text-rose-700 border-rose-200">
+                  {{Child:'👶',Partner:'❤️',Mother:'🌸',Father:'🌟',Friend:'🤝',Other:'👤'}[relation] || '👤'}
+                  {' '}{relation} Profile
+                </span>
+              )}
+
               {profiles.length > 0 && (
                 <ProfileSwitcher
                   profiles={profiles}
@@ -653,7 +661,7 @@ function App() {
           <div className="flex-1 flex overflow-hidden">
             <main className="flex-1 flex flex-col min-w-0 bg-slate-50">
               <ChatWindow messages={messages} isTyping={isTyping} language={language} suggestions={suggestions} onSuggestionSelect={handleSendMessage} />
-              <FaqStarter onSelect={handleSendMessage} disabled={isTyping} language={language} />
+              <FaqStarter onSelect={handleSendMessage} disabled={isTyping} language={language} relation={relation} profileName={name || undefined} />
               <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
             </main>
             <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
