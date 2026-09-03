@@ -155,6 +155,9 @@ class MemoryDatabase:
         if not fields_to_update:
             return self.get_or_create_session(session_id)
 
+        # Ensure the row exists before running UPDATE (fixes new-profile upsert bug)
+        self.get_or_create_session(session_id)
+
         fields_to_update["updated_at"] = datetime.utcnow().isoformat()
         set_clause = ", ".join([f"{k} = ?" for k in fields_to_update.keys()])
         params = list(fields_to_update.values()) + [session_id]
