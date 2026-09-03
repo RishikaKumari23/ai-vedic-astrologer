@@ -208,18 +208,68 @@ class TransitService:
                     sade_sati_status = "Ashtama Shani (8th House Shani)"
                     sade_sati_desc = "Saturn in 8th from Moon. Transformative period encouraging patience and health awareness."
 
+            # House-specific interpretations for major transits
+            JUPITER_HOUSE_INFLUENCE = {
+                1: "Enhances personal confidence, vitality, and fresh positive beginnings.",
+                2: "Supports steady financial growth, family harmony, and articulate expression.",
+                3: "Boosts courage, skillful communication, and productive short initiatives.",
+                4: "Nurtures domestic peace, family happiness, and foundational emotional security.",
+                5: "Expands intellectual power, creative pursuits, and fruitful learning.",
+                6: "Empowers overcoming challenges, competitive strength, and health recovery.",
+                7: "Fosters relationship harmony, meaningful partnerships, and mutual trust.",
+                8: "Deepens intuitive wisdom, transformation, and beneficial hidden discoveries.",
+                9: "Brings auspicious fortune, higher wisdom, and spiritual or mentorship grace.",
+                10: "Expands career opportunities, public reputation, and leadership respect.",
+                11: "Attracts social gains, fulfilling aspirations, and rewarding networks.",
+                12: "Deepens spiritual reflection, foreign prospects, and peaceful detachment.",
+            }
+
+            SATURN_HOUSE_INFLUENCE = {
+                1: "Demands personal discipline, lifestyle maturity, and physical endurance.",
+                2: "Encourages disciplined financial budgeting and responsible speech.",
+                3: "Builds unyielding determination, persistent effort, and practical skills.",
+                4: "Requires emotional patience, domestic accountability, and home stabilization.",
+                5: "Demands serious study habits, structured creativity, and patient investments.",
+                6: "Rewards daily work ethic, overcoming competition, and systematic health routines.",
+                7: "Tests relationship commitments and builds mature, enduring partnerships.",
+                8: "Requires emotional resilience, caution with joint assets, and patience in transitions.",
+                9: "Deepens moral duty (Dharma), steady higher education, and philosophical groundedness.",
+                10: "Demands relentless dedication to professional goals and long-term career building.",
+                11: "Rewards persistent labor with sustained income and genuine, loyal alliances.",
+                12: "Urges quiet introspection, curbing unnecessary waste, and inner discipline.",
+            }
+
+            RAHU_HOUSE_INFLUENCE = {
+                1: "Intensifies self-ambition, personal reinvention, and charismatic boldness.",
+                2: "Sparks creative hunger for new financial avenues and unconventional resources.",
+                3: "Drives bold communication, media curiosity, and courageous initiatives.",
+                4: "Creates desire for modernizing the home, relocation, or domestic change.",
+                5: "Ignites out-of-the-box creativity, speculative interests, and sharp intellect.",
+                6: "Gives sharp competitive edge and unorthodox problem-solving in daily tasks.",
+                7: "Attracts unique alliances, dynamic interactions, and varied social contacts.",
+                8: "Heightens investigative curiosity, interest in research, and sudden breakthroughs.",
+                9: "Awakens unconventional beliefs, higher learning, and foreign/cross-cultural curiosity.",
+                10: "Fuels strong ambition for career breakthroughs and public prominence.",
+                11: "Expands visionary goals, unconventional gains, and diverse friendship circles.",
+                12: "Stimulates overseas connections, vivid dreams, and spiritual transcendence.",
+            }
+
             # Key Highlights
             highlights = []
             for td in transit_details:
+                lh = td["lagna_house"]
                 if td["name"] == "Jupiter":
+                    exp = JUPITER_HOUSE_INFLUENCE.get(lh, "Brings learning and beneficial growth.")
                     if td["is_favorable"]:
-                        highlights.append(f"✨ Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): Favorable expansion and positive opportunities.")
+                        highlights.append(f"✨ Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
                     else:
-                        highlights.append(f"🌱 Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): Steady learning and preparation phase.")
+                        highlights.append(f"🌱 Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
                 elif td["name"] == "Saturn":
-                    highlights.append(f"🪐 Saturn in {td['current_sign']} ({td['lagna_house_desc']}): Demands structure, perseverance, and long-term focus.")
+                    exp = SATURN_HOUSE_INFLUENCE.get(lh, "Demands structure and steady commitment.")
+                    highlights.append(f"🪐 Saturn in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
                 elif td["name"] == "Rahu":
-                    highlights.append(f"⚡ Rahu in {td['current_sign']} ({td['lagna_house_desc']}): Sparks ambition and unconventional growth in this sphere.")
+                    exp = RAHU_HOUSE_INFLUENCE.get(lh, "Sparks ambition and modern growth.")
+                    highlights.append(f"⚡ Rahu in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
 
             return {
                 "available": True,
