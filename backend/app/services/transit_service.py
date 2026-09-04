@@ -6,6 +6,19 @@ from app.services.kundli_service import kundli_service, ZODIAC_SIGNS_ORDER
 
 # Daily in-memory & database transit cache
 _TRANSIT_CACHE: Dict[str, Any] = {}
+_TRANSIT_RAG_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+_EMBEDDINGS_PROVIDER = None
+
+
+def _get_embeddings_provider():
+    global _EMBEDDINGS_PROVIDER
+    if _EMBEDDINGS_PROVIDER is None:
+        try:
+            from app.rag.embeddings import EmbeddingsProvider
+            _EMBEDDINGS_PROVIDER = EmbeddingsProvider()
+        except Exception as e:
+            logger.error(f"Failed to load EmbeddingsProvider: {e}")
+    return _EMBEDDINGS_PROVIDER
 
 ZODIAC = ZODIAC_SIGNS_ORDER
 
@@ -183,6 +196,13 @@ class TransitService:
                         f"{p_name}{retro_note} transit {lagna_house}th house {natal_ascendant} ascendant effects"
                     )
 
+            # Fetch authentic book insights via RAG (cached per date + Lagna)
+            transit_insights = self.get_transit_rag_insights(
+                natal_ascendant=natal_ascendant,
+                rag_queries=rag_queries,
+                target_date=current_transits.get("date", "")
+            )
+
             return {
                 "available": True,
                 "profile_name": session.get("name", "User"),
@@ -191,14 +211,74 @@ class TransitService:
                 "natal_moon_sign": natal_moon_sign,
                 "transit_date": current_transits.get("date"),
                 "transits": transit_details,
-                # RAG queries for chat_service to retrieve book-based interpretations
+                # RAG queries for downstream LLM prompts
                 "rag_queries": rag_queries,
-                # transit_insights is filled in by chat_service after RAG retrieval
-                "transit_insights": [],
+                # Book-based insights for modal display & LLM grounding
+                "transit_insights": transit_insights,
             }
         except Exception as e:
             logger.error(f"Failed to calculate Gochar overlay: {e}")
             return {"available": False, "error": str(e)}
+
+    def get_transit_rag_insights(self, natal_ascendant: str, rag_queries: List[str], target_date: str) -> List[Dict[str, Any]]:
+        """Retrieves authentic book passages for current transits from the knowledge base."""
+        if not rag_queries or not natal_ascendant:
+            return []
+
+        cache_key = f"{target_date}_{natal_ascendant}"
+        if cache_key in _TRANSIT_RAG_CACHE:
+            return _TRANSIT_RAG_CACHE[cache_key]
+
+        insights = []
+        try:
+            from app.rag.vector_store import vector_store
+            from app.config.settings import settings
+            from app.services.topic_service import TOPIC_RELEVANT_BOOKS
+
+            transit_books = TOPIC_RELEVANT_BOOKS.get("timing_general", [])
+            embedder = _get_embeddings_provider()
+            if not embedder:
+                return []
+
+            seen_sources = set()
+            for tq in rag_queries[:3]:
+                try:
+                    tq_vec = embedder.get_embedding(tq)
+                    t_hits = vector_store.hybrid_search(
+                        query=tq, query_vector=tq_vec,
+                        top_k=2, alpha=settings.HYBRID_ALPHA,
+                        preferred_sources=transit_books
+                    )
+                    for hit in t_hits:
+                        if hit["score"] < settings.MIN_RAG_RELEVANCE:
+                            continue
+                        source = hit["metadata"].get("source", "Classical Text")
+                        source_key = (source, hit["text"][:60])
+                        if source_key in seen_sources:
+                            continue
+                        seen_sources.add(source_key)
+
+                        book_name = source.rsplit(".", 1)[0].replace("_", " ").strip()
+                        raw_text = " ".join(hit["text"].split())
+                        snippet = raw_text[:200]
+                        if len(raw_text) > 200:
+                            snippet = snippet.rsplit(" ", 1)[0] + "..."
+
+                        insights.append({
+                            "book": book_name,
+                            "snippet": snippet,
+                            "score": round(hit["score"], 3),
+                        })
+                except Exception as q_err:
+                    logger.warning(f"Transit RAG query failed for '{tq}': {q_err}")
+
+            insights = insights[:3]
+            _TRANSIT_RAG_CACHE[cache_key] = insights
+        except Exception as e:
+            logger.error(f"Error retrieving transit RAG insights: {e}")
+
+        return insights
+
 
 
     def format_gochar_for_prompt(self, gochar_data: Dict) -> str:
