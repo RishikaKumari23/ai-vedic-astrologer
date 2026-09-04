@@ -917,15 +917,16 @@ class ChatService:
             ascendant_sign = parsed.get("ascendant_sign")
             dasha_info = json.loads(cached_dasha) if cached_dasha else None
 
+            active_topic = topic or "general"
             from app.services.topic_service import build_consistency_check, build_reasoning_trace
-            consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+            consistency_check = build_consistency_check(active_topic, planets, ascendant_sign, dasha_info)
 
-            topic_cache = self._get_topic_cache(session, topic)
+            topic_cache = self._get_topic_cache(session, active_topic)
             evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
             gochar_data = transit_service.calculate_gochar_overlay(session)
 
             return build_reasoning_trace(
-                topic, ascendant_sign, planets, dasha_info, consistency_check,
+                active_topic, ascendant_sign, planets, dasha_info, consistency_check,
                 rag_hits_sources, evidence_vote, topic_result=topic_result,
                 gochar_data=gochar_data
             )

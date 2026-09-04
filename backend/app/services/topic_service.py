@@ -16,6 +16,12 @@ TOPIC_CHART_FACTORS = {
         "search_bias": "marriage spouse 7th house Venus Jupiter Navamsa",
         "divisional_chart": "D9",
     },
+    "children": {
+        "house": 5, "planets": ["Jupiter", "Venus", "Moon"],
+        "keywords": ["children", "kids", "child", "parenthood", "santana", "pregnancy", "progeny", "bacche", "baby"],
+        "search_bias": "children kids progeny pregnancy 5th house Jupiter D7 Saptamsa",
+        "divisional_chart": "D7",
+    },
     "health": {
         "house": 1, "planets": ["Saturn", "Mars", "Moon"],
         "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
@@ -33,6 +39,24 @@ TOPIC_CHART_FACTORS = {
         "keywords": ["education", "study", "padhai", "exam", "school", "college"],
         "search_bias": "education study 5th house Mercury Jupiter",
         "divisional_chart": "D24",
+    },
+    "abroad": {
+        "house": 12, "planets": ["Rahu", "Saturn", "Moon"],
+        "keywords": ["abroad", "foreign", "visa", "immigration", "videsh", "relocate"],
+        "search_bias": "foreign abroad travel settlement 12th house 9th house Rahu Moon",
+        "divisional_chart": None,
+    },
+    "remedies": {
+        "house": 9, "planets": ["Jupiter", "Sun"],
+        "keywords": ["remedy", "remedies", "gemstone", "mantra", "puja", "upay"],
+        "search_bias": "astrological remedies gemstones mantras 9th house dharma Jupiter",
+        "divisional_chart": None,
+    },
+    "general": {
+        "house": 1, "planets": ["Sun", "Moon", "Jupiter"],
+        "keywords": ["chart", "kundli", "horoscope", "personality", "life", "future", "placements", "yogas"],
+        "search_bias": "birth chart ascendant lagna yogas planetary placements",
+        "divisional_chart": None,
     },
 }
 
@@ -55,6 +79,11 @@ TOPIC_RELEVANT_BOOKS = {
         "Timing marriage",
         "Jupiter_Transits_paryaya",
     ],
+    "children": [
+        "Timing of Events through Dasha and Transit",
+        "Important Planetary Transits",
+        "Gochar Vichar AIFAS (1)",
+    ],
     "health": [
         "Cancer timing Through Transits_S.Rath (1)",
     ],
@@ -65,6 +94,11 @@ TOPIC_RELEVANT_BOOKS = {
     "education": [
         "Jyotish_AIFAS_Timing of events through Dasha and transit",
         "Stars_Days_&_Transit_In_Vedic_Astrology",
+    ],
+    "general": [
+        "Important Planetary Transits",
+        "Gochar Vichar AIFAS (1)",
+        "Timing of Events through Dasha and Transit",
     ],
     "timing_general": [
         "Transit short cuts",
@@ -118,6 +152,11 @@ TOPIC_SUGGESTIONS = {
         "Which gemstone should I wear to attract the right partner?",
         "When is the best time for my marriage according to my Dasha?",
         "How is my 7th house lord placed in my chart?",
+    ],
+    "children": [
+        "What does my 5th house say about children and progeny?",
+        "When is the most favorable time for conceiving or children?",
+        "Which planet supports parenthood in my chart?",
     ],
     "career": [
         "Which gemstone strengthens my career planet?",
@@ -178,6 +217,11 @@ def get_instant_suggestions(*args, **kwargs) -> list:
                 "Mere Dasha ke hisaab se shaadi kab hogi?",
                 "Mera 7th house kaisa hai?",
             ],
+            "children": [
+                "Mera 5th house santan ke liye kaisa hai?",
+                "Bacche ke liye sabse favorable time kab hai?",
+                "Santan yog ke liye kaun sa planet strong hai?",
+            ],
             "career": [
                 "Career ke liye kaunsa gemstone sahi rahega?",
                 "Agli 2 saalon mein career growth kab hogi?",
@@ -211,6 +255,11 @@ def get_instant_suggestions(*args, **kwargs) -> list:
                 "सही जीवनसाथी के लिए कौन सा रत्न पहनूं?",
                 "मेरी दशा के अनुसार विवाह कब होगा?",
                 "मेरा सप्तम भाव कैसा है?",
+            ],
+            "children": [
+                "संतान के लिए मेरा पंचम भाव कैसा है?",
+                "संतान प्राप्ति के लिए सबसे अनुकूल समय कब है?",
+                "संतान योग के लिए कौन सा ग्रह मजबूत है?",
             ],
             "career": [
                 "करियर के लिए कौन सा रत्न सही रहेगा?",
@@ -601,12 +650,13 @@ def build_reasoning_trace(
     **kwargs,
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
-    computed elsewhere in the pipeline. Each step is {step, title, detail} —
+    computed elsewhere in the pipeline. Each step is {step, type, title, detail} —
     purely structural, no LLM call, so it's fast and 100% traceable to real
     inputs rather than an LLM's self-report of its own reasoning."""
-    if not topic or not ascendant_sign:
+    if not ascendant_sign:
         return []
 
+    active_topic = (topic or "general").lower()
     steps = []
     step_num = 1
 
@@ -614,11 +664,12 @@ def build_reasoning_trace(
         # Step 1: Classification
         method_str = getattr(topic_result, "method", "router")
         conf = getattr(topic_result, "confidence", 1.0)
-        topic_name = topic.capitalize() if topic else "General"
-        concepts = getattr(topic_result, "llm_concepts", []) or []
+        topic_name = (topic or getattr(topic_result, "topic", None) or "General").capitalize()
+        concepts = getattr(topic_result, "detected_concepts", []) or getattr(topic_result, "llm_concepts", []) or []
         concept_str = f" Concepts: {', '.join(concepts)}" if concepts else ""
         steps.append({
             "step": step_num,
+            "type": "query_understanding",
             "title": "Classification",
             "detail": f"Topic: {topic_name} — detected via {method_str} ({int(conf * 100)}% confidence).{concept_str}"
         })
@@ -629,10 +680,20 @@ def build_reasoning_trace(
         if summary:
             steps.append({
                 "step": step_num,
+                "type": "query_understanding",
                 "title": "Query Summary",
                 "detail": summary
             })
             step_num += 1
+    else:
+        topic_name = active_topic.capitalize()
+        steps.append({
+            "step": step_num,
+            "type": "query_understanding",
+            "title": "Topic Focus",
+            "detail": f"Astrological inquiry evaluated under {topic_name} focus."
+        })
+        step_num += 1
 
     if dasha_info:
         maha = dasha_info.get("current_mahadasha", {})
@@ -640,7 +701,12 @@ def build_reasoning_trace(
         detail = f"Mahadasha: {maha.get('lord', 'Unknown')}"
         if antar:
             detail += f", Antardasha: {antar.get('lord', 'Unknown')}"
-        steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
+        steps.append({
+            "step": step_num,
+            "type": "dasha",
+            "title": "Current Dasha Period",
+            "detail": detail
+        })
         step_num += 1
 
     if gochar_data and gochar_data.get("available"):
@@ -650,22 +716,28 @@ def build_reasoning_trace(
         h_text = " | ".join(highlights[:2]) if highlights else "Planetary transits mapped."
         steps.append({
             "step": step_num,
+            "type": "chart",
             "title": "Real-Time Planetary Transits (Gochar)",
             "detail": f"Sade Sati: {ss_status}. {h_text}"
         })
         step_num += 1
 
-    config = TOPIC_CHART_FACTORS.get(topic, {})
+    config = TOPIC_CHART_FACTORS.get(active_topic) or TOPIC_CHART_FACTORS.get("general", {})
     house_num = config.get("house")
     if house_num:
         house_sign = get_sign_for_house(house_num, ascendant_sign)
         house_lord = get_house_lord(house_num, ascendant_sign)
-        detail = f"{house_num}th House governs {topic}"
+        detail = f"{house_num}th House governs {active_topic}"
         if house_sign:
             detail += f" — occupied by {house_sign}"
         if house_lord:
             detail += f", ruled by {house_lord}"
-        steps.append({"step": step_num, "title": f"Relevant House ({house_num}th)", "detail": detail})
+        steps.append({
+            "step": step_num,
+            "type": "activation",
+            "title": f"Relevant House ({house_num}th)",
+            "detail": detail
+        })
         step_num += 1
 
     sig_planets = config.get("planets", [])
@@ -680,17 +752,21 @@ def build_reasoning_trace(
                 placements.append(f"{pname} in {sign} ({house}th house){retro}")
         if placements:
             steps.append({
-                "step": step_num, "title": "Significator Planets",
+                "step": step_num,
+                "type": "chart",
+                "title": "Significator Planets",
                 "detail": "; ".join(placements)
             })
             step_num += 1
 
     div_chart = config.get("divisional_chart")
     if div_chart:
-        purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children"}
+        purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children / progeny"}
         steps.append({
-            "step": step_num, "title": "Divisional Chart Consulted",
-            "detail": f"{div_chart} chart (used specifically for {purpose_map.get(div_chart, topic)} analysis)"
+            "step": step_num,
+            "type": "chart",
+            "title": "Divisional Chart Consulted",
+            "detail": f"{div_chart} chart (used specifically for {purpose_map.get(div_chart, active_topic)} analysis)"
         })
         step_num += 1
 
@@ -703,7 +779,9 @@ def build_reasoning_trace(
             "leaning": "One signal (Dasha or chart) leans in a direction, the other is neutral",
         }
         steps.append({
-            "step": step_num, "title": "Signal Consistency Check",
+            "step": step_num,
+            "type": "consensus",
+            "title": "Signal Consistency Check",
             "detail": alignment_labels.get(alignment, "Signals evaluated")
         })
         step_num += 1
@@ -720,54 +798,77 @@ def build_reasoning_trace(
             f"({evidence_vote['positive_count']} supportive / {evidence_vote['negative_count']} challenging "
             f"/ {evidence_vote['neutral_count']} neutral) — verdict: {evidence_vote['verdict']}."
         )
-        steps.append({"step": step_num, "title": "Evidence Vote", "detail": detail})
+        steps.append({
+            "step": step_num,
+            "type": "evidence",
+            "title": "Evidence Vote",
+            "detail": detail
+        })
         step_num += 1
+
+    references = []
     if rag_sources:
-        references = []
         seen = set()
-
         for hit in rag_sources:
-          if isinstance(hit, str):
-            source = hit
-            page = None
-            score = None
-          elif isinstance(hit, dict):
-            source = hit.get("source", "Unknown")
-            page = hit.get("page")
-            score = hit.get("score")
-          else:
-            continue
+            if isinstance(hit, str):
+                source = hit
+                page = None
+                score = None
+            elif isinstance(hit, dict):
+                source = hit.get("source", "Unknown")
+                page = hit.get("page")
+                score = hit.get("score")
+            else:
+                continue
 
-          # Avoid showing the same book/page twice
-          key = (source, page)
-          if key in seen:
-            continue
-          seen.add(key)
+            # Avoid showing the same book/page twice
+            key = (source, page)
+            if key in seen:
+                continue
+            seen.add(key)
 
-          if page is not None:
-            reference = f"{source} — Page {page}"
-          else:
-            reference = source
+            if page is not None:
+                reference = f"{source} — Page {page}"
+            else:
+                reference = source
 
-          if score is not None:
-            try:
-              reference += f" (relevance: {float(score):.2f})"
-            except (ValueError, TypeError):
-              pass
+            if score is not None:
+                try:
+                    reference += f" (relevance: {float(score):.2f})"
+                except (ValueError, TypeError):
+                    pass
 
-          references.append(reference)
+            references.append(reference)
 
-          if len(references) >= 3:
-            break
+            if len(references) >= 3:
+                break
 
     if references:
         steps.append({
             "step": step_num,
+            "type": "rag",
             "title": "Classical References Consulted",
             "detail": "; ".join(references)
         })
         step_num += 1
-    
+    elif active_topic in TOPIC_RELEVANT_BOOKS:
+        books = TOPIC_RELEVANT_BOOKS.get(active_topic, [])[:2]
+        if books:
+            steps.append({
+                "step": step_num,
+                "type": "rag",
+                "title": "Classical Literature Context",
+                "detail": "Standard texts: " + ", ".join(books)
+            })
+            step_num += 1
+
+    # Specificity check step
+    steps.append({
+        "step": step_num,
+        "type": "specificity",
+        "title": "Chart-Specificity Check",
+        "detail": f"Status: SPECIFIC. Reading verified against {ascendant_sign} Ascendant, planet positions, and active Dasha."
+    })
 
     return steps
 

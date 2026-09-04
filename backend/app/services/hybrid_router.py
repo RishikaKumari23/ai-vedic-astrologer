@@ -86,6 +86,12 @@ _KEYWORD_MAP: dict[str, str] = {
     "debt": "finance", "investment": "finance", "property": "finance", "savings": "finance",
     "aamdani": "finance", "arthik": "finance",
 
+    # children / progeny / parenthood
+    "kids": "children", "kid": "children", "child": "children", "children": "children",
+    "bacche": "children", "baccha": "children", "baby": "children", "santana": "children",
+    "santan": "children", "parenthood": "children", "pregnancy": "children", "progeny": "children",
+    "pregnant": "children", "conceive": "children", "conceiving": "children", "son": "children", "daughter": "children",
+
     # education
     "education": "education", "study": "education", "padhai": "education", "exam": "education",
     "school": "education", "college": "education", "university": "education", "degree": "education",
