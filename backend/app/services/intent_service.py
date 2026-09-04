@@ -7,8 +7,11 @@ from typing import Optional, Dict
 
 INTENT_PATTERNS = {
     "timing": [
-        r"\bwhen\b", r"\bkab\b", r"\bkis (saal|year|mahine|month)\b",
-        r"\bhow soon\b", r"\btime.*(marriage|job|career)\b",
+        r"\bwhen\b", r"\bkab\b", r"\bkab tak\b", r"\bkis (saal|year|mahine|month|samay)\b",
+        r"\bkaunsa (saal|year|mahina|month|samay)\b",
+        r"\bhow soon\b", r"\btime.*(marriage|job|career|children|child|baby)\b",
+        r"\b(which|what|in which) (year|period|month|time|timeline|dates?)\b",
+        r"\btimeline\b", r"\btimeframe\b", r"\bexact (year|time|period|date)\b",
     ],
     "simple_fact": [
         r"\bwhat is my\b", r"\bmera .* kya hai\b", r"\bwhich sign\b",
@@ -85,11 +88,11 @@ RESPONSE_CONTRACTS: Dict[str, str] = {
         "Do not bring in Dasha, timing, or unrelated chart factors."
     ),
     "timing": (
-        "This is a TIMING question. Structure your answer as: (1) the most "
-        "relevant upcoming or current period, (2) why that period is "
-        "relevant (which planet/house), (3) one practical note. Be specific "
-        "about WHEN using the Dasha timeline provided — do not give a vague "
-        "'in the future' answer if real period data is available."
+        "This is a TIMING question. You MUST state the specific year or time window "
+        "(e.g. 'Between March 2028 and March 2029' or 'Around 2028') based on the "
+        "Upcoming Dasha Timeline provided below. FORBIDDEN: Never say 'we need to "
+        "analyze the dashas' or 'timing is closely tied to dashas' — the Dasha "
+        "data is already given below! State the exact favorable period directly in your answer."
     ),
     "explanation": (
         "This is a WHY question. Lead with the main chart factor causing "
