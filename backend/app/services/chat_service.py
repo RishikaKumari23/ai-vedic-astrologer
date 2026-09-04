@@ -600,6 +600,14 @@ class ChatService:
                     missing_evidence = bundle["missing_evidence"]
                     evidence_vote = bundle.get("evidence_vote")
 
+                if intent == "timing" and dasha_timeline_str:
+                    if "Most favorable upcoming periods" in dasha_timeline_str:
+                        fav_part = dasha_timeline_str.split("Most favorable upcoming periods")[-1]
+                        fav_bullets = [l.strip().lstrip("-").strip() for l in fav_part.split("\n") if l.strip().startswith("-")]
+                        if fav_bullets:
+                            bullet_str = "; ".join(fav_bullets[:2])
+                            response_contract += f"\n- MANDATORY TIMING WINDOW: You MUST state the specific favorable period(s) from the chart ({bullet_str}) directly in your response."
+
             gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
             gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, gochar_text)
@@ -802,6 +810,14 @@ class ChatService:
                     consistency_note = bundle["consistency"]
                     missing_evidence = bundle["missing_evidence"]
                     evidence_vote = bundle.get("evidence_vote")
+
+                if intent == "timing" and dasha_timeline_str:
+                    if "Most favorable upcoming periods" in dasha_timeline_str:
+                        fav_part = dasha_timeline_str.split("Most favorable upcoming periods")[-1]
+                        fav_bullets = [l.strip().lstrip("-").strip() for l in fav_part.split("\n") if l.strip().startswith("-")]
+                        if fav_bullets:
+                            bullet_str = "; ".join(fav_bullets[:2])
+                            response_contract += f"\n- MANDATORY TIMING WINDOW: You MUST state the specific favorable period(s) from the chart ({bullet_str}) directly in your response."
 
             gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
             gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""

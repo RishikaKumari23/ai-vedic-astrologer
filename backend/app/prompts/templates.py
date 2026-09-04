@@ -66,8 +66,7 @@ Today's Date: {current_date}
 
 Upcoming Dasha Timeline (use for timing/"when" questions):
 {dasha_timeline}
-Response Contract for THIS question (follow this structure specifically):
-{response_contract}
+
 Birth Details:
 - Name: {name}
 - Date of Birth: {dob}
@@ -91,6 +90,9 @@ Conversation History:
 
 User's Query:
 "{query}"
+
+Response Requirement for THIS Question:
+{response_contract}
 
 Respond now in 2-3 sentences, under 60 words, no lists, no hedging, no source references:
 """
