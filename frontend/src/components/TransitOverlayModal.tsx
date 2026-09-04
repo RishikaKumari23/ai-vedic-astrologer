@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { X, Globe2, Compass, ShieldAlert, Sparkles, MessageCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { X, Globe2, Compass, Sparkles, MessageCircle, RefreshCw } from 'lucide-react';
+
 import { Profile } from './ProfileSwitcher';
 import { API_BASE } from '../api';
 
@@ -30,6 +31,12 @@ interface TransitDetail {
   is_favorable: boolean;
 }
 
+interface TransitInsight {
+  book: string;
+  snippet: string;
+  score: number;
+}
+
 interface ProfileOverlay {
   available: boolean;
   profile_name: string;
@@ -37,14 +44,10 @@ interface ProfileOverlay {
   natal_ascendant: string;
   natal_moon_sign: string;
   transit_date: string;
-  sade_sati: {
-    status: string;
-    description: string;
-    is_active: boolean;
-  };
   transits: TransitDetail[];
-  highlights: string[];
+  transit_insights: TransitInsight[];
 }
+
 
 const PLANET_ICONS: Record<string, string> = {
   Sun: '☀️',
@@ -202,8 +205,6 @@ export default function TransitOverlayModal({
               <div className="flex items-center gap-2 border-b border-slate-100 pb-3 overflow-x-auto">
                 {profiles.map((p) => {
                   const isSelected = p.id === selectedProfileId;
-                  const ov = overlays[p.id];
-                  const hasSadeSati = ov?.sade_sati?.is_active;
 
                   return (
                     <button
@@ -219,12 +220,11 @@ export default function TransitOverlayModal({
                       <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">
                         {p.relation}
                       </span>
-                      {hasSadeSati && (
-                        <span className="w-2 h-2 rounded-full bg-rose-500" title="Sade Sati Active" />
-                      )}
                     </button>
                   );
                 })}
+              </div>
+
               </div>
 
               {loading ? (
@@ -234,8 +234,8 @@ export default function TransitOverlayModal({
                 </div>
               ) : activeOverlay ? (
                 <div className="space-y-5">
-                  {/* Sade Sati & Core Chart Meta Banner */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Chart Meta — Lagna + Moon */}
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm">
                         Lagna
@@ -259,51 +259,32 @@ export default function TransitOverlayModal({
                         </div>
                       </div>
                     </div>
-
-                    <div
-                      className={`border rounded-2xl p-4 flex items-start gap-3 ${
-                        activeOverlay.sade_sati.is_active
-                          ? 'bg-rose-50/70 border-rose-200 text-rose-900'
-                          : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                      }`}
-                    >
-                      <div className="mt-0.5 shrink-0">
-                        {activeOverlay.sade_sati.is_active ? (
-                          <ShieldAlert size={18} className="text-rose-600" />
-                        ) : (
-                          <CheckCircle2 size={18} className="text-emerald-600" />
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-[11px] font-bold uppercase tracking-wider opacity-70">
-                          Sade Sati Status
-                        </div>
-                        <div className="text-xs font-bold mt-0.5">
-                          {activeOverlay.sade_sati.status}
-                        </div>
-                        <p className="text-[11px] opacity-80 mt-1 leading-snug">
-                          {activeOverlay.sade_sati.description}
-                        </p>
-                      </div>
-                    </div>
                   </div>
 
-                  {/* Highlights Summary */}
-                  {activeOverlay.highlights && activeOverlay.highlights.length > 0 && (
+                  {/* Transit Insights — RAG-retrieved book passages */}
+                  {activeOverlay.transit_insights && activeOverlay.transit_insights.length > 0 && (
                     <div className="bg-gradient-to-br from-amber-500/10 to-orange-500/5 border border-amber-200/80 rounded-2xl p-4">
-                      <div className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5 mb-2">
-                        <Sparkles size={14} className="text-amber-600" /> Key Transit Influences For {activeOverlay.profile_name}
+                      <div className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5 mb-3">
+                        <Sparkles size={14} className="text-amber-600" />
+                        Key Transit Insights for {activeOverlay.profile_name}
                       </div>
-                      <div className="space-y-1.5">
-                        {activeOverlay.highlights.map((h, i) => (
-                          <div key={i} className="text-xs text-slate-700 leading-relaxed flex items-start gap-2">
-                            <span>•</span>
-                            <span>{h}</span>
+                      <div className="space-y-3">
+                        {activeOverlay.transit_insights.map((insight, i) => (
+                          <div key={i} className="bg-white/70 rounded-xl border border-amber-100 p-3">
+                            <p className="text-xs text-slate-700 leading-relaxed italic">
+                              "{insight.snippet}"
+                            </p>
+                            <div className="flex items-center gap-1 mt-2">
+                              <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-200">
+                                📚 {insight.book}
+                              </span>
+                            </div>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
+
 
                   {/* House Transits Grid */}
                   <div>
@@ -363,7 +344,6 @@ export default function TransitOverlayModal({
                     <tr>
                       <th className="px-4 py-3">Profile</th>
                       <th className="px-4 py-3">Lagna / Moon</th>
-                      <th className="px-4 py-3">Sade Sati Status</th>
                       <th className="px-4 py-3">🪐 Saturn Transit</th>
                       <th className="px-4 py-3">✨ Jupiter Transit</th>
                       <th className="px-4 py-3">⚡ Rahu / Ketu</th>
@@ -389,21 +369,6 @@ export default function TransitOverlayModal({
                           <td className="px-4 py-3 text-slate-600">
                             {ov?.natal_ascendant ? `${ov.natal_ascendant} / ${ov.natal_moon_sign}` : '—'}
                           </td>
-                          <td className="px-4 py-3">
-                            {ov?.sade_sati ? (
-                              <span
-                                className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  ov.sade_sati.is_active
-                                    ? 'bg-rose-100 text-rose-700'
-                                    : 'bg-emerald-100 text-emerald-700'
-                                }`}
-                              >
-                                {ov.sade_sati.status}
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
                           <td className="px-4 py-3 text-slate-700">
                             {saturn ? `${saturn.lagna_house_desc.split(' ')[0]} in ${saturn.current_sign}` : '—'}
                           </td>
@@ -418,10 +383,10 @@ export default function TransitOverlayModal({
                     })}
                   </tbody>
                 </table>
-              </div>
             </div>
           )}
         </div>
+
 
         {/* Footer Action */}
         <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">

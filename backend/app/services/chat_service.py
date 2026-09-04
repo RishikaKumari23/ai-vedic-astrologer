@@ -16,10 +16,11 @@ from app.services.intent_service import classify_intent, get_response_contract
 from app.services.claim_validator import validate_claims, build_claim_correction_instructions
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
-    build_explanation_footer, TOPIC_CHART_FACTORS, get_instant_suggestions,
+    build_explanation_footer, TOPIC_CHART_FACTORS, TOPIC_RELEVANT_BOOKS, get_instant_suggestions,
     rank_favorable_periods, format_dasha_timeline_for_prompt,
     build_evidence_vote, format_evidence_vote_for_prompt
 )
+
 from app.services.hybrid_router import route_topic
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
@@ -609,7 +610,47 @@ class ChatService:
                             response_contract += f"\n- MANDATORY TIMING WINDOW: You MUST state the specific favorable period(s) from the chart ({bullet_str}) directly in your response."
 
             gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
+
+            # --- Transit RAG Retrieval ---
+            # Use the rag_queries from gochar_data to retrieve book-based interpretations.
+            # This replaces the old hardcoded JUPITER/SATURN/RAHU_HOUSE_INFLUENCE dicts.
+            if gochar_data.get("available") and gochar_data.get("rag_queries"):
+                transit_books = TOPIC_RELEVANT_BOOKS.get("timing_general", [])
+                transit_insights = []
+                seen_sources = set()
+                for tq in gochar_data["rag_queries"][:3]:  # top 3 major planets
+                    try:
+                        tq_vec = self.embeddings_provider.get_embedding(tq)
+                        t_hits = vector_store.hybrid_search(
+                            query=tq, query_vector=tq_vec,
+                            top_k=2, alpha=settings.HYBRID_ALPHA,
+                            preferred_sources=transit_books
+                        )
+                        for hit in t_hits:
+                            if hit["score"] < settings.MIN_RAG_RELEVANCE:
+                                continue
+                            source = hit["metadata"].get("source", "Classical Text")
+                            # Deduplicate by source so we don't repeat the same book twice
+                            source_key = (source, hit["text"][:60])
+                            if source_key in seen_sources:
+                                continue
+                            seen_sources.add(source_key)
+                            # Clean up the filename to a readable book name
+                            book_name = source.rsplit(".", 1)[0].replace("_", " ").strip()
+                            snippet = hit["text"].strip().replace("\n", " ")[:200]
+                            transit_insights.append({
+                                "book": book_name,
+                                "snippet": snippet,
+                                "score": round(hit["score"], 3),
+                            })
+                            logger.info(f"[Transit RAG] '{tq}' → {book_name} (score={hit['score']:.3f})")
+                    except Exception as trag_err:
+                        logger.warning(f"[Transit RAG] query failed for '{tq}': {trag_err}")
+
+                gochar_data["transit_insights"] = transit_insights[:4]  # cap at 4 snippets
+
             gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""
+
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, gochar_text)
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
@@ -820,7 +861,42 @@ class ChatService:
                             response_contract += f"\n- MANDATORY TIMING WINDOW: You MUST state the specific favorable period(s) from the chart ({bullet_str}) directly in your response."
 
             gochar_data = transit_service.calculate_gochar_overlay(session) if (is_astrology and not missing_fields) else {}
+
+            # --- Transit RAG Retrieval (streaming path) ---
+            if gochar_data.get("available") and gochar_data.get("rag_queries"):
+                transit_books = TOPIC_RELEVANT_BOOKS.get("timing_general", [])
+                transit_insights = []
+                seen_sources: set = set()
+                for tq in gochar_data["rag_queries"][:3]:
+                    try:
+                        tq_vec = self.embeddings_provider.get_embedding(tq)
+                        t_hits = vector_store.hybrid_search(
+                            query=tq, query_vector=tq_vec,
+                            top_k=2, alpha=settings.HYBRID_ALPHA,
+                            preferred_sources=transit_books
+                        )
+                        for hit in t_hits:
+                            if hit["score"] < settings.MIN_RAG_RELEVANCE:
+                                continue
+                            source = hit["metadata"].get("source", "Classical Text")
+                            source_key = (source, hit["text"][:60])
+                            if source_key in seen_sources:
+                                continue
+                            seen_sources.add(source_key)
+                            book_name = source.rsplit(".", 1)[0].replace("_", " ").strip()
+                            snippet = hit["text"].strip().replace("\n", " ")[:200]
+                            transit_insights.append({
+                                "book": book_name,
+                                "snippet": snippet,
+                                "score": round(hit["score"], 3),
+                            })
+                            logger.info(f"[Transit RAG stream] '{tq}' → {book_name} (score={hit['score']:.3f})")
+                    except Exception as trag_err:
+                        logger.warning(f"[Transit RAG stream] query failed for '{tq}': {trag_err}")
+                gochar_data["transit_insights"] = transit_insights[:4]
+
             gochar_text = transit_service.format_gochar_for_prompt(gochar_data) if gochar_data.get("available") else ""
+
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, gochar_text)
 
             user_memory = ""

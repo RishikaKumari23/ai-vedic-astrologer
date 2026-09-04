@@ -104,24 +104,20 @@ class TransitService:
         except Exception as e:
             logger.error(f"Error fetching real-time transits: {e}")
 
-        # Fallback realistic positions for 2026 if network is unavailable
-        fallback_planets = [
-            {"name": "Sun", "sign": "Leo", "is_retrograde": False, "degree": 135.2, "nakshatra": "Purva Phalguni"},
-            {"name": "Moon", "sign": "Taurus", "is_retrograde": False, "degree": 42.5, "nakshatra": "Rohini"},
-            {"name": "Mars", "sign": "Gemini", "is_retrograde": False, "degree": 68.0, "nakshatra": "Ardra"},
-            {"name": "Mercury", "sign": "Leo", "is_retrograde": False, "degree": 138.1, "nakshatra": "Purva Phalguni"},
-            {"name": "Jupiter", "sign": "Taurus", "is_retrograde": False, "degree": 48.6, "nakshatra": "Rohini"},
-            {"name": "Venus", "sign": "Virgo", "is_retrograde": False, "degree": 160.4, "nakshatra": "Hasta"},
-            {"name": "Saturn", "sign": "Pisces", "is_retrograde": True, "degree": 352.1, "nakshatra": "Uttara Bhadrapada"},
-            {"name": "Rahu", "sign": "Pisces", "is_retrograde": True, "degree": 344.0, "nakshatra": "Purva Bhadrapada"},
-            {"name": "Ketu", "sign": "Virgo", "is_retrograde": True, "degree": 164.0, "nakshatra": "Hasta"},
-        ]
-        return {"date": target_date, "planets": fallback_planets, "fallback": True}
+        # If real-time API unavailable, return gracefully — no stale hardcoded fallback
+        logger.warning("Real-time transit API unavailable — transit overlay will be skipped")
+        return {"available": False, "planets": [], "reason": "Real-time transit data unavailable — please check your connection"}
 
     def calculate_gochar_overlay(self, session: Dict, current_transits: Optional[Dict] = None) -> Dict[str, Any]:
-        """Calculates transit house placements, Sade Sati status, and Gochar impact for a profile."""
+        """Calculates transit house placements and Gochar impact for a profile.
+        Returns structured transit data + rag_queries for RAG-based interpretation (no hardcoded strings).
+        """
         if not current_transits:
             current_transits = self.get_current_transits()
+
+        # If API is unavailable, propagate gracefully
+        if not current_transits.get("planets"):
+            return {"available": False, "reason": current_transits.get("reason", "Transit data unavailable")}
 
         kundli_raw_str = session.get("kundli_raw")
         if not kundli_raw_str:
@@ -141,15 +137,16 @@ class TransitService:
             if not natal_ascendant:
                 return {"available": False, "reason": "Missing Ascendant sign"}
 
+            # Whole-sign house counting from API-provided natal Lagna sign
             asc_idx = ZODIAC.index(natal_ascendant) if natal_ascendant in ZODIAC else 0
             moon_idx = ZODIAC.index(natal_moon_sign) if natal_moon_sign in ZODIAC else asc_idx
 
             transit_planets = current_transits.get("planets", [])
             transit_details = []
 
-            saturn_sign = ""
-            jupiter_sign = ""
-            rahu_sign = ""
+            # Build RAG queries for the major slow-moving planets so chat_service
+            # can retrieve book passages at prompt time — NO hardcoded interpretation strings here
+            rag_queries = []
 
             for tp in transit_planets:
                 p_name = tp["name"]
@@ -159,20 +156,13 @@ class TransitService:
 
                 t_idx = ZODIAC.index(t_sign)
 
-                # House from Natal Ascendant (Lagna Gochar)
+                # Whole-sign house from Natal Ascendant (Lagna Gochar)
                 lagna_house = (t_idx - asc_idx + 12) % 12 + 1
-                
-                # House from Natal Moon (Chandra Gochar)
+
+                # Whole-sign house from Natal Moon (Chandra Gochar)
                 moon_house = (t_idx - moon_idx + 12) % 12 + 1
 
                 is_benefic_from_moon = moon_house in BENEFIC_HOUSES_FROM_MOON.get(p_name, [])
-
-                if p_name == "Saturn":
-                    saturn_sign = t_sign
-                elif p_name == "Jupiter":
-                    jupiter_sign = t_sign
-                elif p_name == "Rahu":
-                    rahu_sign = t_sign
 
                 transit_details.append({
                     "name": p_name,
@@ -186,90 +176,12 @@ class TransitService:
                     "is_favorable": is_benefic_from_moon,
                 })
 
-            # Evaluate Sade Sati Status
-            sade_sati_status = "Inactive"
-            sade_sati_desc = "Not currently under Sade Sati."
-            if saturn_sign and natal_moon_sign:
-                sat_idx = ZODIAC.index(saturn_sign) if saturn_sign in ZODIAC else -1
-                moon_diff = (sat_idx - moon_idx + 12) % 12 + 1
-                if moon_diff == 12:
-                    sade_sati_status = "Phase 1: Rising (Aarohi)"
-                    sade_sati_desc = "Saturn in 12th from Natal Moon. Focus on mental calm, mindful expenses, and inner development."
-                elif moon_diff == 1:
-                    sade_sati_status = "Phase 2: Peak (Madhya)"
-                    sade_sati_desc = "Saturn transiting over Natal Moon. High responsibility, personal maturation, and discipline required."
-                elif moon_diff == 2:
-                    sade_sati_status = "Phase 3: Setting (Avarohi)"
-                    sade_sati_desc = "Saturn in 2nd from Natal Moon. Financial restructuring, family grounding, and transition into stability."
-                elif moon_diff == 4:
-                    sade_sati_status = "Dhaiya (4th House Shani / Kantaka)"
-                    sade_sati_desc = "Saturn in 4th from Moon. Focus on domestic harmony and career focus."
-                elif moon_diff == 8:
-                    sade_sati_status = "Ashtama Shani (8th House Shani)"
-                    sade_sati_desc = "Saturn in 8th from Moon. Transformative period encouraging patience and health awareness."
-
-            # House-specific interpretations for major transits
-            JUPITER_HOUSE_INFLUENCE = {
-                1: "Enhances personal confidence, vitality, and fresh positive beginnings.",
-                2: "Supports steady financial growth, family harmony, and articulate expression.",
-                3: "Boosts courage, skillful communication, and productive short initiatives.",
-                4: "Nurtures domestic peace, family happiness, and foundational emotional security.",
-                5: "Expands intellectual power, creative pursuits, and fruitful learning.",
-                6: "Empowers overcoming challenges, competitive strength, and health recovery.",
-                7: "Fosters relationship harmony, meaningful partnerships, and mutual trust.",
-                8: "Deepens intuitive wisdom, transformation, and beneficial hidden discoveries.",
-                9: "Brings auspicious fortune, higher wisdom, and spiritual or mentorship grace.",
-                10: "Expands career opportunities, public reputation, and leadership respect.",
-                11: "Attracts social gains, fulfilling aspirations, and rewarding networks.",
-                12: "Deepens spiritual reflection, foreign prospects, and peaceful detachment.",
-            }
-
-            SATURN_HOUSE_INFLUENCE = {
-                1: "Demands personal discipline, lifestyle maturity, and physical endurance.",
-                2: "Encourages disciplined financial budgeting and responsible speech.",
-                3: "Builds unyielding determination, persistent effort, and practical skills.",
-                4: "Requires emotional patience, domestic accountability, and home stabilization.",
-                5: "Demands serious study habits, structured creativity, and patient investments.",
-                6: "Rewards daily work ethic, overcoming competition, and systematic health routines.",
-                7: "Tests relationship commitments and builds mature, enduring partnerships.",
-                8: "Requires emotional resilience, caution with joint assets, and patience in transitions.",
-                9: "Deepens moral duty (Dharma), steady higher education, and philosophical groundedness.",
-                10: "Demands relentless dedication to professional goals and long-term career building.",
-                11: "Rewards persistent labor with sustained income and genuine, loyal alliances.",
-                12: "Urges quiet introspection, curbing unnecessary waste, and inner discipline.",
-            }
-
-            RAHU_HOUSE_INFLUENCE = {
-                1: "Intensifies self-ambition, personal reinvention, and charismatic boldness.",
-                2: "Sparks creative hunger for new financial avenues and unconventional resources.",
-                3: "Drives bold communication, media curiosity, and courageous initiatives.",
-                4: "Creates desire for modernizing the home, relocation, or domestic change.",
-                5: "Ignites out-of-the-box creativity, speculative interests, and sharp intellect.",
-                6: "Gives sharp competitive edge and unorthodox problem-solving in daily tasks.",
-                7: "Attracts unique alliances, dynamic interactions, and varied social contacts.",
-                8: "Heightens investigative curiosity, interest in research, and sudden breakthroughs.",
-                9: "Awakens unconventional beliefs, higher learning, and foreign/cross-cultural curiosity.",
-                10: "Fuels strong ambition for career breakthroughs and public prominence.",
-                11: "Expands visionary goals, unconventional gains, and diverse friendship circles.",
-                12: "Stimulates overseas connections, vivid dreams, and spiritual transcendence.",
-            }
-
-            # Key Highlights
-            highlights = []
-            for td in transit_details:
-                lh = td["lagna_house"]
-                if td["name"] == "Jupiter":
-                    exp = JUPITER_HOUSE_INFLUENCE.get(lh, "Brings learning and beneficial growth.")
-                    if td["is_favorable"]:
-                        highlights.append(f"✨ Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
-                    else:
-                        highlights.append(f"🌱 Jupiter in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
-                elif td["name"] == "Saturn":
-                    exp = SATURN_HOUSE_INFLUENCE.get(lh, "Demands structure and steady commitment.")
-                    highlights.append(f"🪐 Saturn in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
-                elif td["name"] == "Rahu":
-                    exp = RAHU_HOUSE_INFLUENCE.get(lh, "Sparks ambition and modern growth.")
-                    highlights.append(f"⚡ Rahu in {td['current_sign']} ({td['lagna_house_desc']}): {exp}")
+                # Generate a precise RAG query for major transiting planets
+                if p_name in ("Jupiter", "Saturn", "Rahu", "Ketu", "Mars"):
+                    retro_note = " retrograde" if tp.get("is_retrograde") else ""
+                    rag_queries.append(
+                        f"{p_name}{retro_note} transit {lagna_house}th house {natal_ascendant} ascendant effects"
+                    )
 
             return {
                 "available": True,
@@ -278,27 +190,27 @@ class TransitService:
                 "natal_ascendant": natal_ascendant,
                 "natal_moon_sign": natal_moon_sign,
                 "transit_date": current_transits.get("date"),
-                "sade_sati": {
-                    "status": sade_sati_status,
-                    "description": sade_sati_desc,
-                    "is_active": sade_sati_status != "Inactive"
-                },
                 "transits": transit_details,
-                "highlights": highlights
+                # RAG queries for chat_service to retrieve book-based interpretations
+                "rag_queries": rag_queries,
+                # transit_insights is filled in by chat_service after RAG retrieval
+                "transit_insights": [],
             }
         except Exception as e:
             logger.error(f"Failed to calculate Gochar overlay: {e}")
             return {"available": False, "error": str(e)}
 
+
     def format_gochar_for_prompt(self, gochar_data: Dict) -> str:
-        """Formats transit overlay into a concise, grounded prompt block for LLM inference."""
+        """Formats transit overlay into a concise, grounded prompt block for LLM inference.
+        Includes transit_insights (RAG-retrieved book passages with citations) when available.
+        """
         if not gochar_data or not gochar_data.get("available"):
             return "No real-time transit data available."
 
         lines = [
             f"=== Real-Time Planetary Transits (Gochar for {gochar_data.get('profile_name')}) ===",
             f"- Natal Lagna: {gochar_data.get('natal_ascendant')} | Natal Moon: {gochar_data.get('natal_moon_sign')}",
-            f"- Sade Sati Status: {gochar_data.get('sade_sati', {}).get('status')} ({gochar_data.get('sade_sati', {}).get('description')})",
             "- Active Key Transits:"
         ]
 
@@ -307,7 +219,18 @@ class TransitService:
                 fav = "Favorable" if t.get("is_favorable") else "Neutral/Challenging"
                 lines.append(f"  * {t['name']} in {t['current_sign']} (Transiting {t['lagna_house_desc']} from Lagna, {t['moon_house']}th from Moon — {fav})")
 
+        # Append RAG-retrieved book insights when available (populated by chat_service)
+        insights = gochar_data.get("transit_insights", [])
+        if insights:
+            lines.append("\n- Transit Interpretations from Classical Texts:")
+            for insight in insights:
+                book = insight.get("book", "Classical Text")
+                snippet = insight.get("snippet", "")
+                if snippet:
+                    lines.append(f'  [{book}]: "{snippet}"')
+
         return "\n".join(lines)
+
 
 
 transit_service = TransitService()
