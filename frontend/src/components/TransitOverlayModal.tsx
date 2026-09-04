@@ -225,8 +225,6 @@ export default function TransitOverlayModal({
                 })}
               </div>
 
-              </div>
-
               {loading ? (
                 <div className="py-12 flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
                   <RefreshCw size={20} className="animate-spin text-amber-500" />
@@ -383,6 +381,7 @@ export default function TransitOverlayModal({
                     })}
                   </tbody>
                 </table>
+              </div>
             </div>
           )}
         </div>
