@@ -9,6 +9,7 @@ from app.services.geocoding_service import geocoding_service
 from app.services.kundli_service import kundli_service
 from app.rag.vector_store import vector_store
 from app.rag.embeddings import EmbeddingsProvider
+from app.rag.reranker import reranker
 from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
@@ -224,10 +225,13 @@ class ChatService:
         return "No chart data available."
     
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None, llm_summary: Optional[str] = None):
-        """Retrieves top-K chunks, logs their relevance scores (so retrieval
-        quality is actually visible/debuggable), and DROPS chunks below
-        settings.MIN_RAG_RELEVANCE instead of silently feeding weak matches
-        to the LLM as if they were solid ground truth."""
+        """Retrieves Top-K candidate chunks via Hybrid Search, filters by relevance
+        threshold, then runs a Cross-Encoder re-ranking pass to select the final
+        FINAL_TOP_K_RAG chunks that actually go into the LLM prompt.
+
+        Pipeline:
+          Hybrid Search (Top-10) → MIN_RAG_RELEVANCE filter → Cross-Encoder Re-rank → Top-3 → LLM
+        """
         try:
             # Use the router's LLM-generated intent summary as the search query
             # when available — it's always clean English and semantically precise,
@@ -254,6 +258,7 @@ class ChatService:
                     f"source={hit['metadata'].get('source', 'Unknown')}"
                 )
 
+            # --- Stage 1: drop chunks below the hybrid relevance floor ---
             relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
             dropped = len(hits) - len(relevant_hits)
             if dropped > 0:
@@ -266,13 +271,28 @@ class ChatService:
                 logger.info("[RAG] no sufficiently relevant chunks — proceeding with no book context")
                 return "No reference available.", []
 
+            # --- Stage 2: Cross-Encoder re-ranking → keep only FINAL_TOP_K_RAG ---
+            # Use the clean base_query (not biased with topic keywords) so the
+            # cross-encoder judges relevance to what the user actually asked.
+            reranked_hits = reranker.rerank(
+                query=base_query,
+                chunks=relevant_hits,
+                top_k=settings.FINAL_TOP_K_RAG,
+            )
+
             context_chunks = []
             sources = []
-            for i, hit in enumerate(relevant_hits):
+            for i, hit in enumerate(reranked_hits):
                 source = hit["metadata"].get("source", "Unknown")
                 sources.append(source)
+                rerank_score = hit.get("rerank_score")
+                score_label = (
+                    f"rerank={rerank_score:.2f}, hybrid={hit['score']:.2f}"
+                    if rerank_score is not None
+                    else f"relevance={hit['score']:.2f}"
+                )
                 context_chunks.append(
-                    f"--- Context {i+1} [Source: {source}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                    f"--- Context {i+1} [Source: {source}, {score_label}] ---\n{hit['text']}\n"
                 )
 
             return "\n".join(context_chunks), sources
