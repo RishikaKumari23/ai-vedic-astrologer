@@ -598,7 +598,14 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+                # Prefer synthesized_query (clean canonical English) for RAG retrieval.
+                # Fall back to llm_summary, then raw message_text.
+                rag_search_query = (
+                    (topic_result.synthesized_query if topic_result else None)
+                    or (topic_result.llm_summary if topic_result else None)
+                    or message_text
+                )
+                context_str, rag_sources = self._get_rag_context(rag_search_query, topic, llm_summary=None)
 
 
 
@@ -694,12 +701,28 @@ class ChatService:
                     )
 
                 rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
+                query_mode = topic_result.query_mode if topic_result else "personal"
+                if query_mode == "theoretical":
+                    mode_instruction = (
+                        "QUERY MODE: THEORETICAL / GENERAL KNOWLEDGE. "
+                        "The user is asking a general educational astrology question, NOT about their personal chart. "
+                        f"Answer objectively from classical Vedic principles. "
+                        f"Do NOT say 'in your chart', 'in your career', 'your Saturn', or falsely claim any placement belongs to {session.get('name') or 'the user'} unless you have verified it in the chart data below. "
+                        "Explain the concept clearly in universal, impersonal terms. "
+                        "You may add a brief 1-line bridge at the very end offering to look at their personal chart if relevant."
+                    )
+                else:
+                    mode_instruction = (
+                        "QUERY MODE: PERSONAL READING. "
+                        "The user is asking about their own chart. Use the Birth Details and chart data below to give a personal, direct reading."
+                    )
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     name=session.get("name") or "Friend",
                     language=language, dob=session.get("dob") or "Not provided",
                     birth_time=session.get("birth_time") or "Not provided",
                     birth_place=session.get("birth_place") or "Not provided",
                     current_date=current_date,
+                    query_mode_instruction=mode_instruction,
                     relationship_guidance=rel_ctx["prompt_guidance"],
                     context=context_str or "No book context.", kundli_data=final_kundli_data,
                     user_memory=user_memory or "No prior topics discussed yet.",
@@ -849,7 +872,13 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+                # Prefer synthesized_query (clean canonical English) for RAG retrieval.
+                rag_search_query = (
+                    (topic_result.synthesized_query if topic_result else None)
+                    or (topic_result.llm_summary if topic_result else None)
+                    or message_text
+                )
+                context_str, rag_sources = self._get_rag_context(rag_search_query, topic, llm_summary=None)
 
 
 
@@ -940,12 +969,28 @@ class ChatService:
                 )
 
             rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
+            query_mode = topic_result.query_mode if topic_result else "personal"
+            if query_mode == "theoretical":
+                mode_instruction = (
+                    "QUERY MODE: THEORETICAL / GENERAL KNOWLEDGE. "
+                    "The user is asking a general educational astrology question, NOT about their personal chart. "
+                    f"Answer objectively from classical Vedic principles. "
+                    f"Do NOT say 'in your chart', 'in your career', 'your Saturn', or falsely claim any placement belongs to {session.get('name') or 'the user'} unless you have verified it in the chart data below. "
+                    "Explain the concept clearly in universal, impersonal terms. "
+                    "You may add a brief 1-line bridge at the very end offering to look at their personal chart if relevant."
+                )
+            else:
+                mode_instruction = (
+                    "QUERY MODE: PERSONAL READING. "
+                    "The user is asking about their own chart. Use the Birth Details and chart data below to give a personal, direct reading."
+                )
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
                 current_date=current_date,
+                query_mode_instruction=mode_instruction,
                 relationship_guidance=rel_ctx["prompt_guidance"],
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
                 user_memory=user_memory or "No prior topics discussed yet.",

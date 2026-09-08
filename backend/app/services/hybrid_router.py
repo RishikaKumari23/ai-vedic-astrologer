@@ -25,6 +25,7 @@ from typing import List, Optional, TYPE_CHECKING
 import numpy as np
 
 from app.utils.logger import logger
+from app.services.query_synthesizer import classify_query_mode, synthesize_rag_query
 
 if TYPE_CHECKING:
     from app.rag.embeddings import EmbeddingsProvider
@@ -41,6 +42,8 @@ class TopicResult:
     llm_summary: Optional[str] = None  # LLM-generated 1-line description (Layer 3 only)
     detected_houses: List[int] = field(default_factory=list)
     detected_concepts: List[str] = field(default_factory=list)
+    query_mode: str = "personal"        # "personal" | "theoretical" — drives prompt instruction
+    synthesized_query: Optional[str] = None  # Canonical English query for RAG (always populated)
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +368,15 @@ def _adapt_anchor_cache(topic: str, text: str, embeddings_provider: "EmbeddingsP
     except Exception as e:
         logger.warning(f"HybridRouter: Adaptive cache update failed: {e}")
 
+
 def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> TopicResult:
     """
     Classify a user message into a topic using the 3-layer hybrid pipeline.
     This is a synchronous function safe to call from both sync and async contexts.
+
+    Now also runs Universal Query Synthesis on every message:
+    - classify_query_mode: "personal" vs "theoretical" — drives the LLM prompt instruction
+    - synthesize_rag_query: canonical English string optimized for classical book retrieval
     """
     if not message or not message.strip():
         return TopicResult(topic=None, method="none", confidence=0.0)
@@ -376,28 +384,48 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
     # Always extract concepts & houses — these enrich the reasoning panel regardless of topic
     detected_concepts, detected_houses = _detect_concepts_and_houses(message)
 
+    # Universal: classify query mode before routing (personal vs theoretical)
+    query_mode = classify_query_mode(message)
+    logger.info(f"HybridRouter: query_mode='{query_mode}'")
+
     # ── Layer 1: keyword match ──────────────────────────────────────────────
     kw_topic = _keyword_classify(message)
     if kw_topic:
-        logger.info(f"HybridRouter L1 (keyword): '{kw_topic}'")
+        synthesized = synthesize_rag_query(
+            message, topic=kw_topic,
+            detected_houses=detected_houses,
+            detected_concepts=detected_concepts,
+            query_mode=query_mode,
+        )
+        logger.info(f"HybridRouter L1 (keyword): '{kw_topic}' | synthesized='{synthesized}'")
         return TopicResult(
             topic=kw_topic,
             method="keyword",
             confidence=1.0,
             detected_houses=detected_houses,
             detected_concepts=detected_concepts,
+            query_mode=query_mode,
+            synthesized_query=synthesized,
         )
 
     # ── Layer 2: semantic similarity ────────────────────────────────────────
     sem_topic, sem_score = _semantic_classify(message, embeddings_provider)
     if sem_topic:
-        logger.info(f"HybridRouter L2 (semantic): '{sem_topic}' @ {sem_score:.3f}")
+        synthesized = synthesize_rag_query(
+            message, topic=sem_topic,
+            detected_houses=detected_houses,
+            detected_concepts=detected_concepts,
+            query_mode=query_mode,
+        )
+        logger.info(f"HybridRouter L2 (semantic): '{sem_topic}' @ {sem_score:.3f} | synthesized='{synthesized}'")
         return TopicResult(
             topic=sem_topic,
             method="semantic",
             confidence=sem_score,
             detected_houses=detected_houses,
             detected_concepts=detected_concepts,
+            query_mode=query_mode,
+            synthesized_query=synthesized,
         )
 
     # ── Layer 3: LLM structured output ─────────────────────────────────────
@@ -408,9 +436,18 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
     all_houses = sorted(set(detected_houses + llm_houses))
     all_concepts = list(dict.fromkeys(detected_concepts + llm_concepts))
 
-    logger.info(f"HybridRouter L3 result: topic='{llm_topic}', summary='{llm_summary}'")
-    
-    # Adaptive Cache Improvement: If Layer 3 found a valid topic, 
+    synthesized = synthesize_rag_query(
+        message, topic=llm_topic,
+        detected_houses=all_houses,
+        detected_concepts=all_concepts,
+        query_mode=query_mode,
+    )
+    # If Layer 3 produced an llm_summary, prefer it over synthesized query for RAG
+    final_query = llm_summary if llm_summary else synthesized
+
+    logger.info(f"HybridRouter L3 result: topic='{llm_topic}', summary='{llm_summary}', synthesized='{synthesized}'")
+
+    # Adaptive Cache Improvement: If Layer 3 found a valid topic,
     # learn from it by updating the semantic anchors in the background
     if llm_topic:
         threading.Thread(
@@ -427,4 +464,6 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
         llm_summary=llm_summary,
         detected_houses=all_houses,
         detected_concepts=all_concepts,
+        query_mode=query_mode,
+        synthesized_query=final_query,
     )
