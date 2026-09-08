@@ -46,6 +46,9 @@ class MemoryDatabase:
                     yoga_text TEXT,
                     dasha_tree_raw TEXT,
                     topic_cache TEXT,
+                    conversation_summary TEXT,
+                    last_summarized_msg_count INTEGER DEFAULT 0,
+                    relation TEXT DEFAULT 'Self',
                     latitude REAL,
                     longitude REAL,
                     updated_at TEXT
@@ -57,6 +60,7 @@ class MemoryDatabase:
             for col_name, col_type in [
                 ("latitude", "REAL"),
                 ("longitude", "REAL"),
+                ("relation", "TEXT DEFAULT 'Self'"),
                 ("pending_field", "TEXT"),
                 ("kundli_data", "TEXT"),
                 ("kundli_raw", "TEXT"),
@@ -73,6 +77,8 @@ class MemoryDatabase:
                 ("yoga_text", "TEXT"),
                 ("dasha_tree_raw", "TEXT"),
                 ("topic_cache", "TEXT"),
+                ("conversation_summary", "TEXT"),
+                ("last_summarized_msg_count", "INTEGER"),
             ]:
                 if col_name not in existing_cols:
                     cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")
@@ -115,7 +121,7 @@ class MemoryDatabase:
 
             return {
                 "session_id": session_id, "dob": None, "birth_time": None, "birth_place": None,
-                "gender": None, "name": None, "language": "Hinglish", "pending_field": None,
+                "gender": None, "name": None, "relation": "Self", "language": "Hinglish", "pending_field": None,
                 "kundli_data": None, "kundli_raw": None, "kundli_dasha": None, "kundli_divisional": None,
                 "kundli_full_raw": None,
                 "topic_memory": None, "last_reasoning_trace": None,
@@ -129,7 +135,7 @@ class MemoryDatabase:
             return self.get_or_create_session(session_id)
 
         allowed_fields = {
-            "dob", "birth_time", "birth_place", "gender", "name", "language",
+            "dob", "birth_time", "birth_place", "gender", "name", "relation", "language",
             "latitude", "longitude", "pending_field", "kundli_data", "kundli_raw", "kundli_dasha",
             "kundli_divisional", "kundli_full_raw", "topic_memory", "last_reasoning_trace",
             "dashboard_prediction", "dashboard_lucky_color", "dashboard_date",
@@ -148,6 +154,9 @@ class MemoryDatabase:
 
         if not fields_to_update:
             return self.get_or_create_session(session_id)
+
+        # Ensure the row exists before running UPDATE (fixes new-profile upsert bug)
+        self.get_or_create_session(session_id)
 
         fields_to_update["updated_at"] = datetime.utcnow().isoformat()
         set_clause = ", ".join([f"{k} = ?" for k in fields_to_update.keys()])
@@ -189,5 +198,19 @@ class MemoryDatabase:
             cursor.execute("UPDATE sessions SET topic_memory = NULL, updated_at = ? WHERE session_id = ?", 
                            (datetime.utcnow().isoformat(), session_id))
             conn.commit()
+
+    def get_all_valid_profiles(self) -> List[Dict]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT session_id, name, relation, dob, birth_time, birth_place, gender, language, updated_at
+                FROM sessions
+                WHERE name IS NOT NULL AND dob IS NOT NULL AND birth_place IS NOT NULL
+                ORDER BY updated_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
 db = MemoryDatabase()

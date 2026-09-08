@@ -13,12 +13,19 @@ class Settings(BaseSettings):
     PORT: int = 8000
     HOST: str = "0.0.0.0"
 
-    # LLM Provider — "groq" (cloud, always-on) or "ollama" (local)
-    LLM_PROVIDER: str = "groq"
+    # LLM Provider — "openai", "groq" (cloud, always-on) or "ollama" (local)
+    LLM_PROVIDER: str = "openai"
+
+    # OpenAI Settings (used when LLM_PROVIDER=openai)
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+
 
     # Groq Settings (used when LLM_PROVIDER=groq)
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
     # Ollama Settings (used when LLM_PROVIDER=ollama, for local development)
     OLLAMA_HOST: str = "http://localhost:11434"
@@ -40,9 +47,11 @@ class Settings(BaseSettings):
     # RAG Settings
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
-    TOP_K_RETRIEVAL: int = 4
-    MIN_RAG_RELEVANCE: float = 0.3  # Minimum hybrid score to include a chunk in context (0.0–1.0)
-    HYBRID_ALPHA: float = 0.5  # Balance weight between lexical (BM25) and vector cosine search
+    TOP_K_RETRIEVAL: int = 10          # Candidate pool retrieved by Hybrid Search before re-ranking
+    FINAL_TOP_K_RAG: int = 3           # Chunks actually passed to the LLM after Cross-Encoder re-ranking
+    MIN_RAG_RELEVANCE: float = 0.3     # Minimum hybrid score to include a chunk in context (0.0–1.0)
+    HYBRID_ALPHA: float = 0.5          # Balance weight between lexical (BM25) and vector cosine search
+    CROSS_ENCODER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Re-ranker model (~90MB, CPU-optimized)
 
     # External Lambda APIs
     # Kundli chart generation Lambda (AWS ap-south-1)

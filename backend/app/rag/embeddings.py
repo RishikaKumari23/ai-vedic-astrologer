@@ -31,7 +31,8 @@ class EmbeddingsProvider:
             )
 
             self.local_model = SentenceTransformer(
-                self.local_model_name
+                self.local_model_name,
+                device="cpu"
             )
 
             logger.info(

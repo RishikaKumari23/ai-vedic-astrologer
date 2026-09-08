@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react';
-const API_BASE =
-  ((import.meta as ImportMeta & {
-    env?: { VITE_API_BASE?: string }
-  }).env?.VITE_API_BASE) || '/api';
+import { API_BASE } from '../api';
 import {
   Sparkles,
   ChevronDown,
