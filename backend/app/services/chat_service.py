@@ -10,7 +10,7 @@ from app.services.kundli_service import kundli_service
 from app.rag.vector_store import vector_store
 from app.rag.embeddings import EmbeddingsProvider
 from app.rag.reranker import reranker
-from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
+from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT, THEORETICAL_ASTROLOGER_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
 from app.services.intent_service import classify_intent, get_response_contract
@@ -702,37 +702,59 @@ class ChatService:
 
                 rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
                 query_mode = topic_result.query_mode if topic_result else "personal"
+
                 if query_mode == "theoretical":
-                    mode_instruction = (
-                        "QUERY MODE: THEORETICAL / GENERAL KNOWLEDGE. "
-                        "The user is asking a general educational astrology question, NOT about their personal chart. "
-                        f"Answer objectively from classical Vedic principles. "
-                        f"Do NOT say 'in your chart', 'in your career', 'your Saturn', or falsely claim any placement belongs to {session.get('name') or 'the user'} unless you have verified it in the chart data below. "
-                        "Explain the concept clearly in universal, impersonal terms. "
-                        "You may add a brief 1-line bridge at the very end offering to look at their personal chart if relevant."
+                    # Build brief chart awareness for optional bridge without forcing full chart analysis
+                    asc_sign = "Unknown"
+                    brief_placement = "Transit chart available"
+                    try:
+                        if session.get("kundli_raw"):
+                            parsed_chart = json.loads(session["kundli_raw"])
+                            asc_sign = parsed_chart.get("ascendant_sign", "Unknown")
+                        if gochar_data and gochar_data.get("available"):
+                            t_planets = gochar_data.get("planets", [])
+                            matched_placements = []
+                            for tp in t_planets:
+                                p_name = tp.get("name", "")
+                                if p_name.lower() in message_text.lower():
+                                    h_lagna = tp.get("house_from_lagna")
+                                    h_moon = tp.get("house_from_moon")
+                                    matched_placements.append(
+                                        f"{p_name} is transiting your {h_lagna}th house in {tp.get('current_sign')} ({h_moon}th from Moon)"
+                                    )
+                            if matched_placements:
+                                brief_placement = "; ".join(matched_placements)
+                            else:
+                                brief_placement = f"Ascendant is {asc_sign}"
+                    except Exception as bridge_err:
+                        logger.warning(f"Failed to build theoretical chart bridge: {bridge_err}")
+
+                    astrologer_prompt = THEORETICAL_ASTROLOGER_PROMPT.format(
+                        name=session.get("name") or "Friend",
+                        language=language,
+                        ascendant_sign=asc_sign,
+                        actual_placement=brief_placement,
+                        context=context_str or "No classical text excerpts available.",
+                        history=history_text,
+                        query=message_text,
                     )
                 else:
-                    mode_instruction = (
-                        "QUERY MODE: PERSONAL READING. "
-                        "The user is asking about their own chart. Use the Birth Details and chart data below to give a personal, direct reading."
+                    astrologer_prompt = ASTROLOGER_PROMPT.format(
+                        name=session.get("name") or "Friend",
+                        language=language, dob=session.get("dob") or "Not provided",
+                        birth_time=session.get("birth_time") or "Not provided",
+                        birth_place=session.get("birth_place") or "Not provided",
+                        current_date=current_date,
+                        relationship_guidance=rel_ctx["prompt_guidance"],
+                        context=context_str or "No book context.", kundli_data=final_kundli_data,
+                        user_memory=user_memory or "No prior topics discussed yet.",
+                        consistency_note=consistency_note or "No specific conflict detected.",
+                        dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                        response_contract=response_contract,
+                        history=history_text, query=message_text
                     )
-                astrologer_prompt = ASTROLOGER_PROMPT.format(
-                    name=session.get("name") or "Friend",
-                    language=language, dob=session.get("dob") or "Not provided",
-                    birth_time=session.get("birth_time") or "Not provided",
-                    birth_place=session.get("birth_place") or "Not provided",
-                    current_date=current_date,
-                    query_mode_instruction=mode_instruction,
-                    relationship_guidance=rel_ctx["prompt_guidance"],
-                    context=context_str or "No book context.", kundli_data=final_kundli_data,
-                    user_memory=user_memory or "No prior topics discussed yet.",
-                    consistency_note=consistency_note or "No specific conflict detected.",
-                    dasha_timeline=dasha_timeline_str or "No timeline data available.",
-                    response_contract=response_contract,
-                    history=history_text, query=message_text
-                )
-                if cot_injection:
-                    astrologer_prompt += cot_injection
+                    if cot_injection:
+                        astrologer_prompt += cot_injection
                 _temp = self._get_temperature(intent, "")
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=_temp)
 
@@ -970,39 +992,60 @@ class ChatService:
 
             rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
             query_mode = topic_result.query_mode if topic_result else "personal"
+
             if query_mode == "theoretical":
-                mode_instruction = (
-                    "QUERY MODE: THEORETICAL / GENERAL KNOWLEDGE. "
-                    "The user is asking a general educational astrology question, NOT about their personal chart. "
-                    f"Answer objectively from classical Vedic principles. "
-                    f"Do NOT say 'in your chart', 'in your career', 'your Saturn', or falsely claim any placement belongs to {session.get('name') or 'the user'} unless you have verified it in the chart data below. "
-                    "Explain the concept clearly in universal, impersonal terms. "
-                    "You may add a brief 1-line bridge at the very end offering to look at their personal chart if relevant."
+                asc_sign = "Unknown"
+                brief_placement = "Transit chart available"
+                try:
+                    if session.get("kundli_raw"):
+                        parsed_chart = json.loads(session["kundli_raw"])
+                        asc_sign = parsed_chart.get("ascendant_sign", "Unknown")
+                    if gochar_data and gochar_data.get("available"):
+                        t_planets = gochar_data.get("planets", [])
+                        matched_placements = []
+                        for tp in t_planets:
+                            p_name = tp.get("name", "")
+                            if p_name.lower() in message_text.lower():
+                                h_lagna = tp.get("house_from_lagna")
+                                h_moon = tp.get("house_from_moon")
+                                matched_placements.append(
+                                    f"{p_name} is transiting your {h_lagna}th house in {tp.get('current_sign')} ({h_moon}th from Moon)"
+                                )
+                        if matched_placements:
+                            brief_placement = "; ".join(matched_placements)
+                        else:
+                            brief_placement = f"Ascendant is {asc_sign}"
+                except Exception as bridge_err:
+                    logger.warning(f"Failed to build theoretical chart bridge: {bridge_err}")
+
+                astrologer_prompt = THEORETICAL_ASTROLOGER_PROMPT.format(
+                    name=session.get("name") or "Friend",
+                    language=language,
+                    ascendant_sign=asc_sign,
+                    actual_placement=brief_placement,
+                    context=context_str or "No classical text excerpts available.",
+                    history=history_text,
+                    query=message_text,
                 )
             else:
-                mode_instruction = (
-                    "QUERY MODE: PERSONAL READING. "
-                    "The user is asking about their own chart. Use the Birth Details and chart data below to give a personal, direct reading."
+                astrologer_prompt = ASTROLOGER_PROMPT.format(
+                    name=session.get("name") or "Friend",
+                    language=language, dob=session.get("dob") or "Not provided",
+                    birth_time=session.get("birth_time") or "Not provided",
+                    birth_place=session.get("birth_place") or "Not provided",
+                    current_date=current_date,
+                    relationship_guidance=rel_ctx["prompt_guidance"],
+                    context=context_str or "No book context.", kundli_data=final_kundli_data,
+                    user_memory=user_memory or "No prior topics discussed yet.",
+                    consistency_note=consistency_note or "No specific conflict detected.",
+                    dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                    response_contract=response_contract,
+                    history=history_text, query=message_text
                 )
-            astrologer_prompt = ASTROLOGER_PROMPT.format(
-                name=session.get("name") or "Friend",
-                language=language, dob=session.get("dob") or "Not provided",
-                birth_time=session.get("birth_time") or "Not provided",
-                birth_place=session.get("birth_place") or "Not provided",
-                current_date=current_date,
-                query_mode_instruction=mode_instruction,
-                relationship_guidance=rel_ctx["prompt_guidance"],
-                context=context_str or "No book context.", kundli_data=final_kundli_data,
-                user_memory=user_memory or "No prior topics discussed yet.",
-                consistency_note=consistency_note or "No specific conflict detected.",
-                dasha_timeline=dasha_timeline_str or "No timeline data available.",
-                response_contract=response_contract,
-                history=history_text, query=message_text
-            )
-            if repeat_hint:
-                astrologer_prompt += f"\n\n{repeat_hint}"
-            if cot_injection:
-                astrologer_prompt += cot_injection
+                if repeat_hint:
+                    astrologer_prompt += f"\n\n{repeat_hint}"
+                if cot_injection:
+                    astrologer_prompt += cot_injection
 
             gen_temperature = self._get_temperature(intent, repeat_hint)
 
