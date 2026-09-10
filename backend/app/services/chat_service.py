@@ -1086,10 +1086,10 @@ class ChatService:
             db.add_message(session_id, "assistant", full_text)
             threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
 
-            # Claim validation for streamed responses.
-            # Planet/house mismatches → append a visible correction note (tokens
-            # already sent, so we can't retract them — but we can correct them).
-            # AI giveaway / absolute-language issues → log only (internal quality signal).
+            # Claim validation for streamed responses — LOG ONLY.
+            # Tokens are already on the user's screen; we cannot retract them.
+            # We log every failure as an internal quality signal.
+            # The NON-streaming path (process_chat_message) handles actual regeneration.
             if is_astrology and not missing_fields:
                 try:
                     _s_planets: Optional[List[dict]] = None
@@ -1108,24 +1108,10 @@ class ChatService:
                         planets=_s_planets, ascendant_sign=_s_asc
                     )
                     if claim_failures:
-                        # Separate chart-fact mismatches (user-visible) from
-                        # immersion/language issues (internal log only)
-                        chart_fact_failures = [
-                            f for f in claim_failures
-                            if "actual chart" in f.lower() or "actual chart data shows" in f.lower()
-                        ]
-                        other_failures = [f for f in claim_failures if f not in chart_fact_failures]
-
-                        if chart_fact_failures:
-                            correction_note = build_streamed_correction_note(chart_fact_failures, language)
-                            if correction_note:
-                                logger.warning(f"[Critic/Stream] Yielding correction note for {len(chart_fact_failures)} chart-fact issue(s)")
-                                yield {"type": "chunk", "text": correction_note}
-                                # Update stored message to include the correction
-                                db.add_message(session_id, "assistant", full_text + correction_note)
-
-                        if other_failures:
-                            logger.warning(f"[Critic/Stream] {len(other_failures)} non-chart issue(s) (log only): {other_failures}")
+                        logger.warning(
+                            f"[Critic/Stream] {len(claim_failures)} issue(s) detected "
+                            f"(logged, not shown to user): {claim_failures}"
+                        )
                 except Exception as validate_err:
                     logger.error(f"[Critic/Stream] Claim validation failed: {validate_err}")
 
