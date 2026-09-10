@@ -14,7 +14,7 @@ from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT, THEORE
 from app.config.settings import settings
 from app.utils.logger import logger
 from app.services.intent_service import classify_intent, get_response_contract
-from app.services.claim_validator import validate_claims, build_claim_correction_instructions
+from app.services.claim_validator import validate_claims, build_claim_correction_instructions, build_streamed_correction_note
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS, TOPIC_RELEVANT_BOOKS, get_instant_suggestions,
@@ -762,7 +762,23 @@ class ChatService:
                     recent_texts = self._get_recent_assistant_texts(session_id)
                     similar_to = self._is_too_similar(response_text, recent_texts)
 
-                    claim_failures = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+                    # Parse the ground-truth chart JSON so the Critic Layer can
+                    # cross-check every planet/house claim in the LLM response.
+                    _chart_planets: Optional[List[dict]] = None
+                    _chart_asc: Optional[str] = None
+                    try:
+                        _raw = session.get("kundli_raw")
+                        if _raw:
+                            _chart_data = json.loads(_raw) if isinstance(_raw, str) else _raw
+                            _chart_planets = _chart_data.get("planets")
+                            _chart_asc = _chart_data.get("ascendant_sign")
+                    except Exception as _parse_err:
+                        logger.warning(f"[Critic] Could not parse kundli_raw for fact-checking: {_parse_err}")
+
+                    claim_failures = validate_claims(
+                        response_text, dasha_timeline_str, evidence_vote,
+                        planets=_chart_planets, ascendant_sign=_chart_asc
+                    )
 
                     if similar_to or claim_failures:
                         retry_prompt = astrologer_prompt
@@ -774,16 +790,19 @@ class ChatService:
                                 f"Focus specifically on what's different about the CURRENT question."
                             )
                         if claim_failures:
-                            logger.info(f"Claim validation found {len(claim_failures)} issue(s) — regenerating with corrections")
+                            logger.info(f"[Critic] Found {len(claim_failures)} issue(s) — regenerating with corrections")
                             retry_prompt += "\n\n" + build_claim_correction_instructions(claim_failures)
 
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=self._get_temperature(intent, 'retry'))
 
                         # Re-validate once after the fix attempt, log-only —
                         # don't loop indefinitely if the model still misses it.
-                        remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+                        remaining = validate_claims(
+                            response_text, dasha_timeline_str, evidence_vote,
+                            planets=_chart_planets, ascendant_sign=_chart_asc
+                        )
                         if remaining:
-                            logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
+                            logger.warning(f"[Critic] Still {len(remaining)} issue(s) after regeneration: {remaining}")
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
@@ -1067,17 +1086,48 @@ class ChatService:
             db.add_message(session_id, "assistant", full_text)
             threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
 
-            # Claim validation is LOG-ONLY here — tokens are already streamed
-            # to the user, so there's nothing left to regenerate cleanly.
-            # This still gives you visibility into hallucination rate for
-            # streamed responses without breaking the streaming UX.
+            # Claim validation for streamed responses.
+            # Planet/house mismatches → append a visible correction note (tokens
+            # already sent, so we can't retract them — but we can correct them).
+            # AI giveaway / absolute-language issues → log only (internal quality signal).
             if is_astrology and not missing_fields:
                 try:
-                    claim_failures = validate_claims(full_text, dasha_timeline_str, evidence_vote)
+                    _s_planets: Optional[List[dict]] = None
+                    _s_asc: Optional[str] = None
+                    try:
+                        _s_raw = session.get("kundli_raw")
+                        if _s_raw:
+                            _s_chart = json.loads(_s_raw) if isinstance(_s_raw, str) else _s_raw
+                            _s_planets = _s_chart.get("planets")
+                            _s_asc = _s_chart.get("ascendant_sign")
+                    except Exception as _sp_err:
+                        logger.warning(f"[Critic/Stream] Could not parse kundli_raw: {_sp_err}")
+
+                    claim_failures = validate_claims(
+                        full_text, dasha_timeline_str, evidence_vote,
+                        planets=_s_planets, ascendant_sign=_s_asc
+                    )
                     if claim_failures:
-                        logger.warning(f"Claim validation found {len(claim_failures)} issue(s) in streamed response (not corrected — log only): {claim_failures}")
+                        # Separate chart-fact mismatches (user-visible) from
+                        # immersion/language issues (internal log only)
+                        chart_fact_failures = [
+                            f for f in claim_failures
+                            if "actual chart" in f.lower() or "actual chart data shows" in f.lower()
+                        ]
+                        other_failures = [f for f in claim_failures if f not in chart_fact_failures]
+
+                        if chart_fact_failures:
+                            correction_note = build_streamed_correction_note(chart_fact_failures, language)
+                            if correction_note:
+                                logger.warning(f"[Critic/Stream] Yielding correction note for {len(chart_fact_failures)} chart-fact issue(s)")
+                                yield {"type": "chunk", "text": correction_note}
+                                # Update stored message to include the correction
+                                db.add_message(session_id, "assistant", full_text + correction_note)
+
+                        if other_failures:
+                            logger.warning(f"[Critic/Stream] {len(other_failures)} non-chart issue(s) (log only): {other_failures}")
                 except Exception as validate_err:
-                    logger.error(f"Claim validation failed: {validate_err}")
+                    logger.error(f"[Critic/Stream] Claim validation failed: {validate_err}")
 
             if is_astrology and not missing_fields:
                 try:
