@@ -257,28 +257,38 @@ def build_claim_correction_instructions(failures: List[str]) -> str:
 
 
 def build_streamed_correction_note(failures: List[str], language: str = "Hinglish") -> str:
-    """For STREAMED responses where regeneration isn't possible — appends a
-    brief, honest correction note after the fact rather than leaving a
-    detected factual error uncorrected in the user's view. Only used when
-    validate_claims() finds a real chart-fact mismatch."""
+    """For STREAMED responses — appends a brief, friendly self-correction note
+    when the Critic Layer detects a chart-fact mismatch. Sounds like the astrologer
+    naturally clarifying, not a system error. Only surfaces planet/house mismatches."""
     if not failures:
         return ""
 
-    labels = {
-        "English": "\n\n📝 Correction: ",
-        "Hindi": "\n\n📝 सुधार: ",
-        "Hinglish": "\n\n📝 Correction: ",
-    }
-    prefix = labels.get(language, labels["Hinglish"])
-
-    correction_lines = []
+    # Extract only the actual fact pairs: "X is in the Nth house" → "actually Mth house"
+    corrections = []
     for f in failures:
-        # Only surface chart-fact mismatches to the user (not giveaway or absolute-language failures
-        # which are internal quality issues, not public-facing corrections)
+        # Pattern: "...states 'Saturn is in the 12th house', but based on the actual chart, Saturn is in the 5th house..."
         if "actual chart" in f.lower() or "actual chart data shows" in f.lower():
-            correction_lines.append(f.split(".")[0] + ".")
+            # Pull out just the key correction fact (first sentence)
+            first_sentence = f.split(".")[0]
+            corrections.append(first_sentence)
 
-    if not correction_lines:
+    if not corrections:
         return ""
 
-    return prefix + " ".join(correction_lines)
+    # Language-appropriate prefix that sounds like a natural self-correction
+    prefix_map = {
+        "English": "\n\n*Quick clarification — ",
+        "Hindi": "\n\n*एक छोटा सुधार — ",
+        "Hinglish": "\n\n*Ek quick correction — ",
+    }
+    suffix_map = {
+        "English": " I always read directly from your chart.*",
+        "Hindi": " मैं सीधे आपकी कुंडली से पढ़ता/पढ़ती हूं।*",
+        "Hinglish": " Main aapki actual kundali se hi padhta/padhti hoon.*",
+    }
+
+    prefix = prefix_map.get(language, prefix_map["Hinglish"])
+    suffix = suffix_map.get(language, suffix_map["Hinglish"])
+
+    body = " ".join(corrections)
+    return prefix + body + suffix
