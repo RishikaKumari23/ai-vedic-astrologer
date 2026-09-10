@@ -200,7 +200,7 @@ class KundliService:
             logger.error(f"Failed to derive dasha inputs: {e}")
             return None
 
-    def summarize_kundli(self, kundli_data: Dict, dob: Optional[str] = None) -> str:
+    def summarize_kundli(self, kundli_data: Dict, dob: Optional[str] = None, dasha_info=None) -> str:
         try:
             lines = []
             positions = kundli_data.get("planetary_positions", [])
@@ -220,14 +220,30 @@ class KundliService:
                     moon_sign = sign
 
                 retro_marker = " (retrograde)" if is_retro else ""
-                planet_lines.append(f"{name} in {sign}{retro_marker}")
+                planet_lines.append((name, sign, retro_marker))
 
             if ascendant_sign:
                 lines.append(f"Ascendant (Lagna): {ascendant_sign}")
             if moon_sign:
                 lines.append(f"Moon Sign (Rashi): {moon_sign}")
+
+            # Build planet descriptions WITH house numbers so the LLM never hallucinates a house
             if planet_lines:
-                lines.append("Planetary positions: " + ", ".join(planet_lines))
+                desc_parts = []
+                for name, sign, retro_marker in planet_lines:
+                    house_num = None
+                    if ascendant_sign and sign:
+                        try:
+                            asc_idx = ZODIAC_SIGNS_ORDER.index(ascendant_sign)
+                            sign_idx = ZODIAC_SIGNS_ORDER.index(sign)
+                            house_num = ((sign_idx - asc_idx) % 12) + 1
+                        except ValueError:
+                            pass
+                    if house_num:
+                        desc_parts.append(f"{name} in {sign} (House {house_num}){retro_marker}")
+                    else:
+                        desc_parts.append(f"{name} in {sign}{retro_marker}")
+                lines.append("Planetary positions: " + ", ".join(desc_parts))
 
             chart_positions = kundli_data.get("chart_planet_positions", {})
             d9 = chart_positions.get("D9", {}) if chart_positions else {}

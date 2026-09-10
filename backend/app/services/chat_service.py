@@ -527,6 +527,51 @@ class ChatService:
             logger.error(f"Follow-up suggestion generation failed: {followup_err}")
             return []
 
+    def _build_chart_ground_truth(self, session: Dict) -> str:
+        """Builds a compact, authoritative fact-list of planet → house placements
+        from the cached kundli_raw JSON. This is injected into the ASTROLOGER_PROMPT
+        as a hard constraint so the LLM never hallucinates a house number.
+
+        Example output:
+          • Sun → House 3 (Gemini)
+          • Moon → House 1 (Aries)
+          • Saturn → House 5 (Cancer)
+          ...
+        Returns an empty string if chart data is not yet available.
+        """
+        try:
+            raw = session.get("kundli_raw")
+            if not raw:
+                return ""
+            chart = json.loads(raw) if isinstance(raw, str) else raw
+            planets = chart.get("planets", [])
+            ascendant_sign = chart.get("ascendant_sign", "")
+            if not planets or not ascendant_sign:
+                return ""
+
+            from app.services.claim_validator import ZODIAC_SIGNS
+            try:
+                asc_idx = ZODIAC_SIGNS.index(ascendant_sign)
+            except ValueError:
+                return ""
+
+            lines = [f"  • Ascendant (Lagna) → {ascendant_sign} (House 1)"]
+            for p in planets:
+                name = p.get("name", "")
+                sign = p.get("sign_name", "")
+                if not name or not sign:
+                    continue
+                try:
+                    sign_idx = ZODIAC_SIGNS.index(sign)
+                    house_num = ((sign_idx - asc_idx) % 12) + 1
+                    lines.append(f"  • {name} → House {house_num} ({sign})")
+                except ValueError:
+                    lines.append(f"  • {name} → {sign}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"[GroundTruth] Could not build chart ground truth: {e}")
+            return ""
+
     # ------------------------------------------------------------------
     # NON-STREAMING — POST /api/chat
     # ------------------------------------------------------------------
@@ -739,6 +784,7 @@ class ChatService:
                         query=message_text,
                     )
                 else:
+                    chart_ground_truth = self._build_chart_ground_truth(session)
                     astrologer_prompt = ASTROLOGER_PROMPT.format(
                         name=session.get("name") or "Friend",
                         language=language, dob=session.get("dob") or "Not provided",
@@ -751,6 +797,7 @@ class ChatService:
                         consistency_note=consistency_note or "No specific conflict detected.",
                         dasha_timeline=dasha_timeline_str or "No timeline data available.",
                         response_contract=response_contract,
+                        chart_ground_truth=chart_ground_truth or "Chart data not yet available.",
                         history=history_text, query=message_text
                     )
                     if cot_injection:
@@ -1047,6 +1094,7 @@ class ChatService:
                     query=message_text,
                 )
             else:
+                chart_ground_truth = self._build_chart_ground_truth(session)
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     name=session.get("name") or "Friend",
                     language=language, dob=session.get("dob") or "Not provided",
@@ -1059,6 +1107,7 @@ class ChatService:
                     consistency_note=consistency_note or "No specific conflict detected.",
                     dasha_timeline=dasha_timeline_str or "No timeline data available.",
                     response_contract=response_contract,
+                    chart_ground_truth=chart_ground_truth or "Chart data not yet available.",
                     history=history_text, query=message_text
                 )
                 if repeat_hint:
