@@ -10,11 +10,11 @@ from app.services.kundli_service import kundli_service
 from app.rag.vector_store import vector_store
 from app.rag.embeddings import EmbeddingsProvider
 from app.rag.reranker import reranker
-from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
+from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT, THEORETICAL_ASTROLOGER_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
 from app.services.intent_service import classify_intent, get_response_contract
-from app.services.claim_validator import validate_claims, build_claim_correction_instructions
+from app.services.claim_validator import validate_claims, build_claim_correction_instructions, build_streamed_correction_note
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS, TOPIC_RELEVANT_BOOKS, get_instant_suggestions,
@@ -527,6 +527,51 @@ class ChatService:
             logger.error(f"Follow-up suggestion generation failed: {followup_err}")
             return []
 
+    def _build_chart_ground_truth(self, session: Dict) -> str:
+        """Builds a compact, authoritative fact-list of planet → house placements
+        from the cached kundli_raw JSON. This is injected into the ASTROLOGER_PROMPT
+        as a hard constraint so the LLM never hallucinates a house number.
+
+        Example output:
+          • Sun → House 3 (Gemini)
+          • Moon → House 1 (Aries)
+          • Saturn → House 5 (Cancer)
+          ...
+        Returns an empty string if chart data is not yet available.
+        """
+        try:
+            raw = session.get("kundli_raw")
+            if not raw:
+                return ""
+            chart = json.loads(raw) if isinstance(raw, str) else raw
+            planets = chart.get("planets", [])
+            ascendant_sign = chart.get("ascendant_sign", "")
+            if not planets or not ascendant_sign:
+                return ""
+
+            from app.services.claim_validator import ZODIAC_SIGNS
+            try:
+                asc_idx = ZODIAC_SIGNS.index(ascendant_sign)
+            except ValueError:
+                return ""
+
+            lines = [f"  • Ascendant (Lagna) → {ascendant_sign} (House 1)"]
+            for p in planets:
+                name = p.get("name", "")
+                sign = p.get("sign_name", "")
+                if not name or not sign:
+                    continue
+                try:
+                    sign_idx = ZODIAC_SIGNS.index(sign)
+                    house_num = ((sign_idx - asc_idx) % 12) + 1
+                    lines.append(f"  • {name} → House {house_num} ({sign})")
+                except ValueError:
+                    lines.append(f"  • {name} → {sign}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"[GroundTruth] Could not build chart ground truth: {e}")
+            return ""
+
     # ------------------------------------------------------------------
     # NON-STREAMING — POST /api/chat
     # ------------------------------------------------------------------
@@ -598,7 +643,14 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+                # Prefer synthesized_query (clean canonical English) for RAG retrieval.
+                # Fall back to llm_summary, then raw message_text.
+                rag_search_query = (
+                    (topic_result.synthesized_query if topic_result else None)
+                    or (topic_result.llm_summary if topic_result else None)
+                    or message_text
+                )
+                context_str, rag_sources = self._get_rag_context(rag_search_query, topic, llm_summary=None)
 
 
 
@@ -694,22 +746,62 @@ class ChatService:
                     )
 
                 rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
-                astrologer_prompt = ASTROLOGER_PROMPT.format(
-                    name=session.get("name") or "Friend",
-                    language=language, dob=session.get("dob") or "Not provided",
-                    birth_time=session.get("birth_time") or "Not provided",
-                    birth_place=session.get("birth_place") or "Not provided",
-                    current_date=current_date,
-                    relationship_guidance=rel_ctx["prompt_guidance"],
-                    context=context_str or "No book context.", kundli_data=final_kundli_data,
-                    user_memory=user_memory or "No prior topics discussed yet.",
-                    consistency_note=consistency_note or "No specific conflict detected.",
-                    dasha_timeline=dasha_timeline_str or "No timeline data available.",
-                    response_contract=response_contract,
-                    history=history_text, query=message_text
-                )
-                if cot_injection:
-                    astrologer_prompt += cot_injection
+                query_mode = topic_result.query_mode if topic_result else "personal"
+
+                if query_mode == "theoretical":
+                    # Build brief chart awareness for optional bridge without forcing full chart analysis
+                    asc_sign = "Unknown"
+                    brief_placement = "Transit chart available"
+                    try:
+                        if session.get("kundli_raw"):
+                            parsed_chart = json.loads(session["kundli_raw"])
+                            asc_sign = parsed_chart.get("ascendant_sign", "Unknown")
+                        if gochar_data and gochar_data.get("available"):
+                            t_planets = gochar_data.get("planets", [])
+                            matched_placements = []
+                            for tp in t_planets:
+                                p_name = tp.get("name", "")
+                                if p_name.lower() in message_text.lower():
+                                    h_lagna = tp.get("house_from_lagna")
+                                    h_moon = tp.get("house_from_moon")
+                                    matched_placements.append(
+                                        f"{p_name} is transiting your {h_lagna}th house in {tp.get('current_sign')} ({h_moon}th from Moon)"
+                                    )
+                            if matched_placements:
+                                brief_placement = "; ".join(matched_placements)
+                            else:
+                                brief_placement = f"Ascendant is {asc_sign}"
+                    except Exception as bridge_err:
+                        logger.warning(f"Failed to build theoretical chart bridge: {bridge_err}")
+
+                    astrologer_prompt = THEORETICAL_ASTROLOGER_PROMPT.format(
+                        name=session.get("name") or "Friend",
+                        language=language,
+                        ascendant_sign=asc_sign,
+                        actual_placement=brief_placement,
+                        context=context_str or "No classical text excerpts available.",
+                        history=history_text,
+                        query=message_text,
+                    )
+                else:
+                    chart_ground_truth = self._build_chart_ground_truth(session)
+                    astrologer_prompt = ASTROLOGER_PROMPT.format(
+                        name=session.get("name") or "Friend",
+                        language=language, dob=session.get("dob") or "Not provided",
+                        birth_time=session.get("birth_time") or "Not provided",
+                        birth_place=session.get("birth_place") or "Not provided",
+                        current_date=current_date,
+                        relationship_guidance=rel_ctx["prompt_guidance"],
+                        context=context_str or "No book context.", kundli_data=final_kundli_data,
+                        user_memory=user_memory or "No prior topics discussed yet.",
+                        consistency_note=consistency_note or "No specific conflict detected.",
+                        dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                        response_contract=response_contract,
+                        chart_ground_truth=chart_ground_truth or "Chart data not yet available.",
+                        history=history_text, query=message_text
+                    )
+                    if cot_injection:
+                        astrologer_prompt += cot_injection
                 _temp = self._get_temperature(intent, "")
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=_temp)
 
@@ -717,7 +809,23 @@ class ChatService:
                     recent_texts = self._get_recent_assistant_texts(session_id)
                     similar_to = self._is_too_similar(response_text, recent_texts)
 
-                    claim_failures = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+                    # Parse the ground-truth chart JSON so the Critic Layer can
+                    # cross-check every planet/house claim in the LLM response.
+                    _chart_planets: Optional[List[dict]] = None
+                    _chart_asc: Optional[str] = None
+                    try:
+                        _raw = session.get("kundli_raw")
+                        if _raw:
+                            _chart_data = json.loads(_raw) if isinstance(_raw, str) else _raw
+                            _chart_planets = _chart_data.get("planets")
+                            _chart_asc = _chart_data.get("ascendant_sign")
+                    except Exception as _parse_err:
+                        logger.warning(f"[Critic] Could not parse kundli_raw for fact-checking: {_parse_err}")
+
+                    claim_failures = validate_claims(
+                        response_text, dasha_timeline_str, evidence_vote,
+                        planets=_chart_planets, ascendant_sign=_chart_asc
+                    )
 
                     if similar_to or claim_failures:
                         retry_prompt = astrologer_prompt
@@ -729,16 +837,19 @@ class ChatService:
                                 f"Focus specifically on what's different about the CURRENT question."
                             )
                         if claim_failures:
-                            logger.info(f"Claim validation found {len(claim_failures)} issue(s) — regenerating with corrections")
+                            logger.info(f"[Critic] Found {len(claim_failures)} issue(s) — regenerating with corrections")
                             retry_prompt += "\n\n" + build_claim_correction_instructions(claim_failures)
 
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=self._get_temperature(intent, 'retry'))
 
                         # Re-validate once after the fix attempt, log-only —
                         # don't loop indefinitely if the model still misses it.
-                        remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+                        remaining = validate_claims(
+                            response_text, dasha_timeline_str, evidence_vote,
+                            planets=_chart_planets, ascendant_sign=_chart_asc
+                        )
                         if remaining:
-                            logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
+                            logger.warning(f"[Critic] Still {len(remaining)} issue(s) after regeneration: {remaining}")
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
@@ -849,7 +960,13 @@ class ChatService:
             context_str = ""
             rag_sources = []
             if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic, llm_summary=topic_result.llm_summary if topic_result else None)
+                # Prefer synthesized_query (clean canonical English) for RAG retrieval.
+                rag_search_query = (
+                    (topic_result.synthesized_query if topic_result else None)
+                    or (topic_result.llm_summary if topic_result else None)
+                    or message_text
+                )
+                context_str, rag_sources = self._get_rag_context(rag_search_query, topic, llm_summary=None)
 
 
 
@@ -940,24 +1057,63 @@ class ChatService:
                 )
 
             rel_ctx = get_relationship_context(session.get("relation"), session.get("name"), language)
-            astrologer_prompt = ASTROLOGER_PROMPT.format(
-                name=session.get("name") or "Friend",
-                language=language, dob=session.get("dob") or "Not provided",
-                birth_time=session.get("birth_time") or "Not provided",
-                birth_place=session.get("birth_place") or "Not provided",
-                current_date=current_date,
-                relationship_guidance=rel_ctx["prompt_guidance"],
-                context=context_str or "No book context.", kundli_data=final_kundli_data,
-                user_memory=user_memory or "No prior topics discussed yet.",
-                consistency_note=consistency_note or "No specific conflict detected.",
-                dasha_timeline=dasha_timeline_str or "No timeline data available.",
-                response_contract=response_contract,
-                history=history_text, query=message_text
-            )
-            if repeat_hint:
-                astrologer_prompt += f"\n\n{repeat_hint}"
-            if cot_injection:
-                astrologer_prompt += cot_injection
+            query_mode = topic_result.query_mode if topic_result else "personal"
+
+            if query_mode == "theoretical":
+                asc_sign = "Unknown"
+                brief_placement = "Transit chart available"
+                try:
+                    if session.get("kundli_raw"):
+                        parsed_chart = json.loads(session["kundli_raw"])
+                        asc_sign = parsed_chart.get("ascendant_sign", "Unknown")
+                    if gochar_data and gochar_data.get("available"):
+                        t_planets = gochar_data.get("planets", [])
+                        matched_placements = []
+                        for tp in t_planets:
+                            p_name = tp.get("name", "")
+                            if p_name.lower() in message_text.lower():
+                                h_lagna = tp.get("house_from_lagna")
+                                h_moon = tp.get("house_from_moon")
+                                matched_placements.append(
+                                    f"{p_name} is transiting your {h_lagna}th house in {tp.get('current_sign')} ({h_moon}th from Moon)"
+                                )
+                        if matched_placements:
+                            brief_placement = "; ".join(matched_placements)
+                        else:
+                            brief_placement = f"Ascendant is {asc_sign}"
+                except Exception as bridge_err:
+                    logger.warning(f"Failed to build theoretical chart bridge: {bridge_err}")
+
+                astrologer_prompt = THEORETICAL_ASTROLOGER_PROMPT.format(
+                    name=session.get("name") or "Friend",
+                    language=language,
+                    ascendant_sign=asc_sign,
+                    actual_placement=brief_placement,
+                    context=context_str or "No classical text excerpts available.",
+                    history=history_text,
+                    query=message_text,
+                )
+            else:
+                chart_ground_truth = self._build_chart_ground_truth(session)
+                astrologer_prompt = ASTROLOGER_PROMPT.format(
+                    name=session.get("name") or "Friend",
+                    language=language, dob=session.get("dob") or "Not provided",
+                    birth_time=session.get("birth_time") or "Not provided",
+                    birth_place=session.get("birth_place") or "Not provided",
+                    current_date=current_date,
+                    relationship_guidance=rel_ctx["prompt_guidance"],
+                    context=context_str or "No book context.", kundli_data=final_kundli_data,
+                    user_memory=user_memory or "No prior topics discussed yet.",
+                    consistency_note=consistency_note or "No specific conflict detected.",
+                    dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                    response_contract=response_contract,
+                    chart_ground_truth=chart_ground_truth or "Chart data not yet available.",
+                    history=history_text, query=message_text
+                )
+                if repeat_hint:
+                    astrologer_prompt += f"\n\n{repeat_hint}"
+                if cot_injection:
+                    astrologer_prompt += cot_injection
 
             gen_temperature = self._get_temperature(intent, repeat_hint)
 
@@ -979,17 +1135,45 @@ class ChatService:
             db.add_message(session_id, "assistant", full_text)
             threading.Thread(target=self._update_rolling_summary, args=(session_id, session), daemon=True).start()
 
-            # Claim validation is LOG-ONLY here — tokens are already streamed
-            # to the user, so there's nothing left to regenerate cleanly.
-            # This still gives you visibility into hallucination rate for
-            # streamed responses without breaking the streaming UX.
+            # Claim validation for streamed responses.
+            # Chart-fact mismatches (wrong house/sign) → yield a friendly self-correction note.
+            # Other issues (absolute language, AI giveaway) → log only, internal signal.
             if is_astrology and not missing_fields:
                 try:
-                    claim_failures = validate_claims(full_text, dasha_timeline_str, evidence_vote)
+                    _s_planets: Optional[List[dict]] = None
+                    _s_asc: Optional[str] = None
+                    try:
+                        _s_raw = session.get("kundli_raw")
+                        if _s_raw:
+                            _s_chart = json.loads(_s_raw) if isinstance(_s_raw, str) else _s_raw
+                            _s_planets = _s_chart.get("planets")
+                            _s_asc = _s_chart.get("ascendant_sign")
+                    except Exception as _sp_err:
+                        logger.warning(f"[Critic/Stream] Could not parse kundli_raw: {_sp_err}")
+
+                    claim_failures = validate_claims(
+                        full_text, dasha_timeline_str, evidence_vote,
+                        planets=_s_planets, ascendant_sign=_s_asc
+                    )
                     if claim_failures:
-                        logger.warning(f"Claim validation found {len(claim_failures)} issue(s) in streamed response (not corrected — log only): {claim_failures}")
+                        chart_fact_failures = [
+                            f for f in claim_failures
+                            if "actual chart" in f.lower() or "actual chart data shows" in f.lower()
+                        ]
+                        other_failures = [f for f in claim_failures if f not in chart_fact_failures]
+
+                        if chart_fact_failures:
+                            # Build a conversational self-correction note (not a system error)
+                            correction_note = build_streamed_correction_note(chart_fact_failures, language)
+                            if correction_note:
+                                logger.warning(f"[Critic/Stream] Appending chart-fact correction for {len(chart_fact_failures)} issue(s)")
+                                yield {"type": "chunk", "text": correction_note}
+                                db.add_message(session_id, "assistant", full_text + correction_note)
+
+                        if other_failures:
+                            logger.warning(f"[Critic/Stream] {len(other_failures)} quality issue(s) (log only): {other_failures}")
                 except Exception as validate_err:
-                    logger.error(f"Claim validation failed: {validate_err}")
+                    logger.error(f"[Critic/Stream] Claim validation failed: {validate_err}")
 
             if is_astrology and not missing_fields:
                 try:

@@ -1,22 +1,43 @@
 """
 Claim Validator 2.0 — verifies specific factual claims in the generated
 response against the REAL chart/Dasha data actually fed to the LLM, not
-just plausible-sounding text. Two independent checks:
+just plausible-sounding text. Three independent checks:
 
 1. Year/timeframe claims — must match the real Dasha timeline (existing).
-2. Chart-fact claims — planet-in-sign and planet-in-house statements must
-   match the actual computed chart. This catches the more dangerous
-   hallucination: the LLM confidently stating a WRONG planet placement,
-   not just a wrong date.
+2. Absolute language — blocked when evidence confidence is low (existing).
+3. Chart-fact claims — planet-in-sign and planet-in-house statements must
+   match the actual computed chart. This catches the most dangerous
+   hallucination: the LLM confidently stating a WRONG planet placement.
+4. AI Giveaway phrases — robotic phrases that break the immersion (e.g.
+   "according to the database", "as per the provided JSON") are blocked.
 """
 import re
 from typing import List, Optional, Dict
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 ABSOLUTE_CLAIM_PATTERNS = [
     r"\bwill definitely\b", r"\byou will surely\b", r"\bguaranteed\b",
     r"\b100%\b", r"\bcertainly will\b",
     r"\bpakka\b.*\bhoga\b", r"\bzaroor\b.*\bhoga\b",
 ]
+
+# Phrases that make the AI sound like a robot/database and break immersion.
+AI_GIVEAWAY_PHRASES = [
+    r"according to the (database|data|json|provided data|system)",
+    r"as per the (provided json|json data|database|system|classical texts)",
+    r"the (database|json|data) (shows|says|indicates|states|contains)",
+    r"based on the (provided json|database|data provided to me)",
+    r"the (provided|given) chart data (shows|says|indicates)",
+    r"i (cannot|can't|am unable to) access",
+    r"i don'?t have access to",
+    r"as an ai",
+    r"as a language model",
+    r"i'?m just an? (ai|language model|chatbot)",
+]
+AI_GIVEAWAY_PATTERNS = [re.compile(p, re.IGNORECASE) for p in AI_GIVEAWAY_PHRASES]
 
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
@@ -26,6 +47,18 @@ ZODIAC_SIGNS = [
     "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
 ]
 
+# Word-form house numbers so we catch "in the tenth house" as well as "10th house"
+HOUSE_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "eleventh": 11, "twelfth": 12,
+}
+HOUSE_WORD_PATTERN = re.compile(
+    r"\b(" + "|".join(PLANET_NAMES) + r")\b[^.]{0,30}?\b("
+    + "|".join(HOUSE_WORDS.keys()) + r")\s+house\b",
+    re.IGNORECASE
+)
+
 # Matches phrases like "Mercury is in Virgo", "Mercury in Virgo", "Saturn placed in Libra"
 PLANET_SIGN_PATTERN = re.compile(
     r"\b(" + "|".join(PLANET_NAMES) + r")\b[^.]{0,25}?\b(" + "|".join(ZODIAC_SIGNS) + r")\b",
@@ -33,11 +66,16 @@ PLANET_SIGN_PATTERN = re.compile(
 )
 
 # Matches phrases like "Mercury in the 1st house", "10th house lord Mercury"
-PLANET_HOUSE_PATTERN = re.compile(
+# Covers both numeric (1st, 10th) and word-form (first, tenth)
+PLANET_HOUSE_NUMERIC_PATTERN = re.compile(
     r"\b(" + "|".join(PLANET_NAMES) + r")\b[^.]{0,20}?\b(1[0-2]|[1-9])(?:st|nd|rd|th)\s+house\b",
     re.IGNORECASE
 )
 
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _extract_years_from_timeline(dasha_timeline: str) -> List[int]:
     if not dasha_timeline:
@@ -79,29 +117,72 @@ def _verify_planet_sign_claims(text: str, planets: List[dict]) -> List[str]:
 
 
 def _verify_planet_house_claims(text: str, planets: List[dict], ascendant_sign: Optional[str]) -> List[str]:
-    """Checks every 'Planet in Nth house' claim against the real chart."""
+    """Checks every 'Planet in Nth house' claim against the real chart.
+    Covers both numeric (1st, 10th) and word-form (first, tenth) house mentions.
+    """
     failures = []
     if not planets or not ascendant_sign:
         return failures
 
-    for match in PLANET_HOUSE_PATTERN.finditer(text):
-        claimed_planet = match.group(1).strip().capitalize()
-        claimed_house = int(match.group(2))
+    # Build lookup: planet name → actual house number
+    actual_houses: Dict[str, int] = {}
+    for p in planets:
+        pname = p.get("name")
+        psign = p.get("sign_name", "")
+        if pname and psign:
+            h = _get_house_for_sign(psign, ascendant_sign)
+            if h:
+                actual_houses[pname] = h
 
-        planet_match = next((p for p in planets if p.get("name") == claimed_planet), None)
-        if not planet_match:
-            continue
-
-        actual_house = _get_house_for_sign(planet_match.get("sign_name", ""), ascendant_sign)
+    def _check_claim(claimed_planet: str, claimed_house: int) -> Optional[str]:
+        claimed_planet = claimed_planet.strip().capitalize()
+        actual_house = actual_houses.get(claimed_planet)
         if actual_house and actual_house != claimed_house:
-            failures.append(
+            return (
                 f"The response states '{claimed_planet} is in the {claimed_house}th house', but "
                 f"based on the actual chart, {claimed_planet} is in the {actual_house}th house. "
                 f"Correct this — do not state a house placement that doesn't match the chart data provided."
             )
+        return None
+
+    # Numeric form: "1st house", "10th house"
+    for match in PLANET_HOUSE_NUMERIC_PATTERN.finditer(text):
+        msg = _check_claim(match.group(1), int(match.group(2)))
+        if msg:
+            failures.append(msg)
+
+    # Word form: "first house", "tenth house"
+    for match in HOUSE_WORD_PATTERN.finditer(text):
+        house_num = HOUSE_WORDS.get(match.group(2).lower())
+        if house_num:
+            msg = _check_claim(match.group(1), house_num)
+            if msg:
+                failures.append(msg)
 
     return failures
 
+
+def _verify_ai_giveaways(text: str) -> List[str]:
+    """Scans the response for robotic / immersion-breaking phrases that make
+    the AI sound like a database query engine rather than a wise astrologer.
+    Returns one failure per detected giveaway."""
+    failures = []
+    for pattern in AI_GIVEAWAY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            snippet = match.group(0)
+            failures.append(
+                f"The response contains an immersion-breaking AI phrase: \"{snippet}\". "
+                f"Rewrite this response WITHOUT mentioning databases, JSON, AI, or data systems. "
+                f"Speak as a genuine Vedic astrologer who has studied the birth chart directly."
+            )
+            break  # One failure is enough to trigger a regeneration
+    return failures
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def validate_claims(
     response_text: str,
@@ -110,10 +191,11 @@ def validate_claims(
     planets: Optional[List[dict]] = None,
     ascendant_sign: Optional[str] = None,
 ) -> List[str]:
-    """Returns a list of specific validation failures across THREE checks:
+    """Returns a list of specific validation failures across FOUR checks:
     1. Year/timeframe claims vs. real Dasha timeline
     2. Absolute/deterministic language vs. evidence confidence
-    3. Planet-sign / planet-house claims vs. the real computed chart (NEW)
+    3. Planet-sign / planet-house claims vs. the real computed chart
+    4. AI giveaway phrases that break the immersion
     """
     failures = []
     text = response_text.strip()
@@ -153,11 +235,14 @@ def validate_claims(
                 f"be stated as a certainty, especially when evidence is mixed or moderate."
             )
 
-    # --- Check 3 (NEW): Chart-fact verification ---
+    # --- Check 3: Chart-fact verification ---
     if planets:
         failures.extend(_verify_planet_sign_claims(text, planets))
         if ascendant_sign:
             failures.extend(_verify_planet_house_claims(text, planets, ascendant_sign))
+
+    # --- Check 4: AI Giveaway phrases ---
+    failures.extend(_verify_ai_giveaways(text))
 
     return failures
 
@@ -170,30 +255,40 @@ def build_claim_correction_instructions(failures: List[str]) -> str:
         lines.append(f"{i}. {f}")
     return "\n".join(lines)
 
+
 def build_streamed_correction_note(failures: List[str], language: str = "Hinglish") -> str:
-    """For STREAMED responses where regeneration isn't possible — appends a
-    brief, honest correction note after the fact rather than leaving a
-    detected factual error uncorrected in the user's view. Only used when
-    validate_claims() finds a real chart-fact mismatch."""
+    """For STREAMED responses — appends a brief, friendly self-correction note
+    when the Critic Layer detects a chart-fact mismatch. Sounds like the astrologer
+    naturally clarifying, not a system error. Only surfaces planet/house mismatches."""
     if not failures:
         return ""
 
-    labels = {
-        "English": "\n\n📝 Correction: ",
-        "Hindi": "\n\n📝 सुधार: ",
-        "Hinglish": "\n\n📝 Correction: ",
-    }
-    prefix = labels.get(language, labels["Hinglish"])
-
-    # Only surface the corrected FACT, not the full internal validator
-    # message (which is written as an LLM instruction, not user-facing text)
-    correction_lines = []
+    # Extract only the actual fact pairs: "X is in the Nth house" → "actually Mth house"
+    corrections = []
     for f in failures:
-        # Extract just the "actual chart shows X" portion when present
-        if "the actual chart" in f.lower() or "actual chart data shows" in f.lower():
-            correction_lines.append(f.split(".")[0] + ".")
+        # Pattern: "...states 'Saturn is in the 12th house', but based on the actual chart, Saturn is in the 5th house..."
+        if "actual chart" in f.lower() or "actual chart data shows" in f.lower():
+            # Pull out just the key correction fact (first sentence)
+            first_sentence = f.split(".")[0]
+            corrections.append(first_sentence)
 
-    if not correction_lines:
+    if not corrections:
         return ""
 
-    return prefix + " ".join(correction_lines)
+    # Language-appropriate prefix that sounds like a natural self-correction
+    prefix_map = {
+        "English": "\n\n*Quick clarification — ",
+        "Hindi": "\n\n*एक छोटा सुधार — ",
+        "Hinglish": "\n\n*Ek quick correction — ",
+    }
+    suffix_map = {
+        "English": " I always read directly from your chart.*",
+        "Hindi": " मैं सीधे आपकी कुंडली से पढ़ता/पढ़ती हूं।*",
+        "Hinglish": " Main aapki actual kundali se hi padhta/padhti hoon.*",
+    }
+
+    prefix = prefix_map.get(language, prefix_map["Hinglish"])
+    suffix = suffix_map.get(language, suffix_map["Hinglish"])
+
+    body = " ".join(corrections)
+    return prefix + body + suffix
