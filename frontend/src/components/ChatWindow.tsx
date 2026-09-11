@@ -26,20 +26,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, lang
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-    const hasConversation = messages.some(m => m.role === 'user' || m.role === 'assistant');
+  const hasConversation = messages.some(m => m.role === 'user' || m.role === 'assistant');
 
-    return (
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-        {!hasConversation && (
-          <div className="flex justify-start max-w-2xl mx-auto">
-            <div className="flex gap-4">
-              <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-base shadow-sm shrink-0">🔮</div>
-              <div className="bg-white border border-slate-200 text-slate-800 rounded-2xl px-5 py-3.5 shadow-sm leading-relaxed">
-                {greeting}
-              </div>
+  return (
+    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+      {!hasConversation && (
+        <div className="flex justify-start max-w-2xl mx-auto">
+          <div className="flex gap-4">
+            <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-base shadow-sm shrink-0">🔮</div>
+            <div className="bg-white border border-slate-200 text-slate-800 rounded-2xl px-5 py-3.5 shadow-sm leading-relaxed">
+              {greeting}
             </div>
           </div>
-        )}
+        </div>
+      )}
 
       <div className="max-w-2xl mx-auto space-y-6">
         {messages.map((msg, index) => {
@@ -79,6 +79,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, lang
             </div>
           );
         })}
+
         {/* Follow-up suggestion chips after last bot message */}
         {!isTyping && suggestions.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2 max-w-2xl mx-auto pl-12">
@@ -93,6 +94,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, lang
             ))}
           </div>
         )}
+
         <div ref={bottomRef} />
       </div>
     </div>

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { API_BASE } from '../api';
 import {
   Sparkles,
   ChevronDown,
@@ -10,10 +9,10 @@ import {
   ShieldCheck,
   Brain,
   Search,
-  Gauge,
-  FileCheck2,
   ListOrdered,
-  MessageCircleQuestion,
+  FileCheck2,
+  Scale,
+  Gauge,
 } from 'lucide-react';
 
 interface TraceStep {
@@ -24,13 +23,17 @@ interface TraceStep {
     | 'query_understanding'
     | 'rag'
     | 'chart'
-    | 'activation'
+    | 'buckets'
+    | 'fact_rule_table'
+    | 'sufficiency'
     | 'personalized_rag'
     | 'consensus'
+    | 'contradiction'
     | 'dasha'
     | 'evidence'
     | 'synthesis'
     | 'specificity'
+    | 'claim_mapping'
     | 'general';
 }
 
@@ -71,52 +74,23 @@ const STRINGS: Record<
   },
 };
 
-// Backend's 10-step trace (see chat_service.py _build_reasoning_trace):
-// 1 query_understanding (LLM), 2 rag, 3 chart, 4 activation,
-// 5 personalized_rag, 6 consensus, 7 dasha, 8 evidence, 9 synthesis,
-// 10 specificity.
 const STEP_ICONS = {
-  query_understanding: MessageCircleQuestion,
+  query_understanding: Search,
   rag: BookOpen,
   chart: CircleUserRound,
-  activation: ListOrdered,
-  personalized_rag: Search,
-  consensus: Gauge,
+  buckets: ListOrdered,
+  fact_rule_table: FileCheck2,
+  sufficiency: Gauge,
+  personalized_rag: BookOpen,
+  consensus: Scale,
+  contradiction: ShieldCheck,
   dasha: Clock3,
   evidence: ShieldCheck,
   synthesis: Brain,
-  specificity: FileCheck2,
+  specificity: CircleUserRound,
+  claim_mapping: FileCheck2,
   general: Sparkles,
 };
-
-// Step 6 ("Evidence Consensus") detail text contains a line like
-// "Evidence confidence: HIGH" (see consensus_lines in chat_service.py).
-// NOTE: backend says "Evidence confidence:", not "Evidence consensus:" —
-// the regex below matches the backend's actual wording.
-const CONSENSUS_STYLES: Record<string, string> = {
-  HIGH: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  MEDIUM: 'bg-amber-50 text-amber-700 border-amber-200',
-  LOW: 'bg-slate-100 text-slate-500 border-slate-200',
-  CONFLICTING: 'bg-rose-50 text-rose-700 border-rose-200',
-};
-
-function extractConsensusLabel(detail: string): string | null {
-  const match = detail.match(/Evidence confidence:\s*(HIGH|MEDIUM|LOW|CONFLICTING)/i);
-  return match ? match[1].toUpperCase() : null;
-}
-
-// Step 10 ("Chart-Specificity Check") detail text contains a line like
-// "Status: SPECIFIC" or "Status: GENERIC" (see specificity_lines in
-// chat_service.py).
-const SPECIFICITY_STYLES: Record<string, string> = {
-  SPECIFIC: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  GENERIC: 'bg-rose-50 text-rose-700 border-rose-200',
-};
-
-function extractSpecificityLabel(detail: string): string | null {
-  const match = detail.match(/Status:\s*(SPECIFIC|GENERIC)/i);
-  return match ? match[1].toUpperCase() : null;
-}
 
 export default function ReasoningTrace({
   sessionId,
@@ -134,7 +108,7 @@ export default function ReasoningTrace({
 
     setLoading(true);
 
-    fetch(`${API_BASE}/session/${sessionId}/reasoning-trace`)
+    fetch(`/api/session/${sessionId}/reasoning-trace`)
       .then((res) => {
         if (!res.ok) {
           throw new Error('Failed to fetch reasoning trace');
@@ -142,7 +116,9 @@ export default function ReasoningTrace({
         return res.json();
       })
       .then((data) => {
-        setSteps(data.available ? data.steps || [] : []);
+        const receivedSteps: TraceStep[] = data.available ? data.steps || [] : [];
+        receivedSteps.sort((a, b) => a.step - b.step);
+        setSteps(receivedSteps);
       })
       .catch(() => {
         setSteps([]);
@@ -211,16 +187,7 @@ export default function ReasoningTrace({
           ) : (
             <ol className="space-y-4">
               {steps.map((s, index) => {
-                const stepType = s.type || 'general';
-                const Icon = STEP_ICONS[stepType as keyof typeof STEP_ICONS] ?? Sparkles;
-                if (!(stepType in STEP_ICONS)) {
-                  console.warn('Unknown reasoning step type:', stepType, s);
-                }
-
-                const consensusLabel =
-                  stepType === 'consensus' ? extractConsensusLabel(s.detail) : null;
-                const specificityLabel =
-                  stepType === 'specificity' ? extractSpecificityLabel(s.detail) : null;
+                const Icon = STEP_ICONS[s.type || 'general'];
 
                 return (
                   <li
@@ -234,28 +201,8 @@ export default function ReasoningTrace({
 
                     {/* Step content */}
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-semibold text-slate-700">
-                          {s.step}. {s.title}
-                        </span>
-                        {consensusLabel && (
-                          <span
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                              CONSENSUS_STYLES[consensusLabel] || CONSENSUS_STYLES.LOW
-                            }`}
-                          >
-                            {consensusLabel} CONFIDENCE
-                          </span>
-                        )}
-                        {specificityLabel && (
-                          <span
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                              SPECIFICITY_STYLES[specificityLabel] || SPECIFICITY_STYLES.GENERIC
-                            }`}
-                          >
-                            {specificityLabel}
-                          </span>
-                        )}
+                      <div className="text-xs font-semibold text-slate-700">
+                        {s.step}. {s.title}
                       </div>
 
                       <div className="text-xs text-slate-500 mt-1 leading-relaxed whitespace-pre-line">

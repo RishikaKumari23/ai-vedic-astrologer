@@ -1,8 +1,13 @@
+/// <reference types="vite/client" />
+
 import { useState, useEffect } from 'react';
 import { X, Globe2, Compass, Sparkles, MessageCircle, RefreshCw } from 'lucide-react';
 
 import { Profile } from './ProfileSwitcher';
-import { API_BASE } from '../api';
+
+export const API_BASE = import.meta.env.VITE_API_URL 
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api';
 
 interface TransitOverlayModalProps {
   profiles: Profile[];
