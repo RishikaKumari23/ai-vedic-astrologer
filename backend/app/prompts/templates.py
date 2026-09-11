@@ -67,6 +67,7 @@ Today's Date: {current_date}
 Upcoming Dasha Timeline (use for timing/"when" questions):
 {dasha_timeline}
 
+
 Birth Details:
 - Name: {name}
 - Date of Birth: {dob}
