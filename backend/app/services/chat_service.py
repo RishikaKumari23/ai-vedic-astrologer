@@ -492,7 +492,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         )
         return fallback
 
-    def _build_framework_query(self, message_text: str, topic: Optional[str] = None, life_area: str = "") -> str:
+    def _build_framework_query(self, message_text: str, topic: Optional[str] = None, life_area: str = "", session: Optional[dict] = None) -> str:
         parts = [
             message_text.strip(),
             "classical astrology principles rules indications relevant factors"
@@ -503,7 +503,28 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             bias = get_search_bias(topic)
             if bias:
                 parts.append(bias)
-        return " ".join(p for p in parts if p).strip()
+
+        query = " ".join(p for p in parts if p).strip()
+        
+        if session:
+            raw = session.get("kundli_raw")
+            if raw:
+                try:
+                    import json
+                    chart = json.loads(raw) if isinstance(raw, str) else raw
+                    planets = chart.get("planets", [])
+                    msg_lower = message_text.lower()
+                    for p in planets:
+                        name = p.get("name", "")
+                        if name and str(p.get("isRetro", "")).lower() == "true":
+                            if name.lower() in msg_lower:
+                                logger.info(f"Retrograde planet '{name}' detected in query. Enriching RAG search.")
+                                query += " retrograde Vakri classical effects"
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to check retrograde planets for RAG enrichment: {e}")
+        
+        return query
 
     def _extract_referenced_factors(self, rag_hits: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
         houses: Set[str] = set()
@@ -594,7 +615,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 sign = match.get("sign_name", "")
                 house = get_house_for_sign(sign, ascendant_sign) if ascendant_sign else None
                 house_str = f", house {house}" if house else ""
-                retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
+                retro = " [Vakri / Retrograde]" if str(match.get("isRetro", "")).lower() == "true" else ""
                 lines.append(f"- {planet_name}: {sign}{house_str}{retro}")
 
         if dasha_info and ("dasha" in concepts or "mahadasha" in concepts or "antardasha" in concepts or not lines):
@@ -687,7 +708,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 if cached_context:
                     framework_chunks.append(cached_context)
             else:
-                framework_query = self._build_framework_query(message_text, topic, life_area)
+                framework_query = self._build_framework_query(message_text, topic, life_area, session)
                 framework_hits_raw = vector_store.dual_retrieve(
                     topic_query=framework_query,
                     global_query=message_text,

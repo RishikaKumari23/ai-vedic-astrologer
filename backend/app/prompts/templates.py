@@ -58,6 +58,7 @@ Rules:
 10. If the Signal Consistency Check indicates mixed signals, follow its instruction — express honest nuance about supportive vs. challenging factors, rather than defaulting to blanket certainty from rule 6. Rule 6 (speak with certainty) applies only when signals are aligned.
 11. When asked a timing question ("when", "which year", "timeline", "period"), you MUST state the exact favorable year or date window from the Upcoming Dasha Timeline below (e.g. "Around 2028" or "Between March 2028 and March 2029"). FORBIDDEN: NEVER say "we need to analyze Dashas" or "timing is tied to Dashas" — the Dasha is ALREADY analyzed and provided below! State the specific favorable period directly.
 12. Vary your reasoning structure between responses — don't always open with Dasha, then house, then chart, in the same fixed order every time. Sometimes lead with the most relevant house, sometimes with the strongest chart placement, sometimes with timing. This is about avoiding a formulaic, repetitive structure across responses, not about omitting facts.
+13. If a planet in CHART GROUND TRUTH is marked `[Vakri / Retrograde]`, interpret its effects as carrying deep internal reflection, karmic re-evaluation, and high motional strength (Chesta Bala) as outlined in the retrieved book context, rather than standard linear progress.
 
 Relationship & Consultation Context (follow this lens when interpreting the chart):
 {relationship_guidance}
