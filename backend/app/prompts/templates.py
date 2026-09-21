@@ -96,10 +96,7 @@ User's Query:
 Response Requirement for THIS Question:
 {response_contract}
 
-⚠️ CHART GROUND TRUTH — Do NOT deviate from these facts:
-{chart_ground_truth}
-
-Respond now in 2-3 sentences, under 60 words, no lists, no hedging, no source references:
+Respond now in 3-4 sentences, under 85 words, no lists, no hedging, no source references:
 """
 
 THEORETICAL_ASTROLOGER_PROMPT = """You are an experienced, wise, and articulate Indian Vedic Astrologer.

@@ -167,7 +167,7 @@ class ChatService:
             if not name or not sign:
                 continue
             house = get_house_for_sign(sign, ascendant_sign)
-            retro = " (retrograde)" if str(p.get("isRetro", "")).lower() == "true" else ""
+            retro = " [Vakri / Retrograde]" if str(p.get("isRetro", "")).lower() == "true" else ""
             house_str = f", house {house}" if house else ""
             lines.append(f"{name}: {sign}{house_str}{retro}")
 
