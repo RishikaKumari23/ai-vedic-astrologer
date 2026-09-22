@@ -96,6 +96,9 @@ User's Query:
 Response Requirement for THIS Question:
 {response_contract}
 
+⚠️ CHART GROUND TRUTH — These are the user's exact natal placements. Do NOT deviate from them:
+{chart_ground_truth}
+
 Respond now in 3-4 sentences, under 85 words, no lists, no hedging, no source references:
 """
 

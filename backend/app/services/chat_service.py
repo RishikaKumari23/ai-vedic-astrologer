@@ -145,7 +145,13 @@ class ChatService:
             "as genuine future predictions."
         )
 
-    def _build_verified_chart_block(self, session: Dict) -> str:
+    def _build_chart_ground_truth(self, session: Dict) -> str:
+        """Build a strict verified chart fact block injected as {chart_ground_truth}.
+
+        Lists every planet with its sign, house number, and [Vakri / Retrograde] tag
+        where applicable. This block is placed at the bottom of ASTROLOGER_PROMPT
+        as a hard constraint — the LLM must NEVER contradict it.
+        """
         cached_raw = session.get("kundli_raw")
         if not cached_raw:
             return ""
@@ -169,17 +175,13 @@ class ChatService:
             house = get_house_for_sign(sign, ascendant_sign)
             retro = " [Vakri / Retrograde]" if str(p.get("isRetro", "")).lower() == "true" else ""
             house_str = f", house {house}" if house else ""
-            lines.append(f"{name}: {sign}{house_str}{retro}")
+            lines.append(f"- {name}: {sign}{house_str}{retro}")
 
-        return (
-            "ACTUAL VERIFIED CHART PLACEMENTS (this is the user's real chart — the ONLY source of "
-            "truth for where each planet actually is):\n" + "\n".join(lines) +
-            "\n\nHARD RULE: retrieved classical text may describe a rule using a DIFFERENT house "
-            "placement for a planet as a general/illustrative example (e.g. 'if Mercury is in the "
-            "10th house...'). If that placement doesn't match the VERIFIED list above, it is NOT a "
-            "description of this user's actual chart — never state a planet's house placement that "
-            "contradicts the verified list above."
-        )
+        return "\n".join(lines)
+
+    # Legacy alias — keeps any other callers working without changes
+    def _build_verified_chart_block(self, session: Dict) -> str:
+        return self._build_chart_ground_truth(session)
 
     def _chunk_text_for_streaming(self, text: str, words_per_chunk: int = 6):
         words = text.split(' ')
@@ -1327,10 +1329,6 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         if targeted_facts:
             final_kundli_data = f"{final_kundli_data}\n\n{targeted_facts}" if final_kundli_data else targeted_facts
 
-        verified_block = self._build_verified_chart_block(session)
-        if verified_block:
-            final_kundli_data = f"{final_kundli_data}\n\n{verified_block}" if final_kundli_data else verified_block
-
         user_memory = self._get_user_memory_block(session, topic)
         repeat_hint = self._get_repeat_topic_hint(session, topic)
 
@@ -1347,6 +1345,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             "consistency_note": consistency_note,
             "dasha_timeline_str": dasha_timeline_str,
             "evidence_vote": evidence_vote,
+            "chart_ground_truth": self._build_chart_ground_truth(session),
         }
 
     def _build_astrologer_prompt(self, session: Dict, language: str, history_text: str,
@@ -1365,6 +1364,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             consistency_note=ctx["consistency_note"] or "No specific conflict detected.",
             dasha_timeline=ctx["dasha_timeline_str"] or "No timeline data available.",
             response_contract=ctx["response_contract"],
+            chart_ground_truth=ctx.get("chart_ground_truth") or "Chart data not available.",
             history=history_text, query=message_text
         )
         if ctx["repeat_hint"]:
