@@ -16,7 +16,7 @@ import WeeklyGuidance from './components/WeeklyGuidance';
 import FaqStarter from './components/FaqStarter';
 import ReasoningTrace from './components/ReasoningTrace';
 import KundliReportButton from './components/KundliReportButton';
-import CouplePage from './components/couplePage';
+import CouplePage from './components/CouplePage';
 import AstrologyCalendar from './components/AstrologyCalendar';
 
 
