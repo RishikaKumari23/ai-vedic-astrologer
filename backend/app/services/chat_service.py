@@ -1657,11 +1657,11 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             # Hybrid RecSys (Phase 1 + 2 + 3): chart-signal + session-aware suggestions.
             # Falls back to LLM-generated followups if RecSys errors.
             from app.services.recsys_service import get_suggestions
-            from app.database import db
+            from app.memory.database import db as _db
             suggestions = []
             if response_text and len(response_text) > 20:
                 try:
-                    recent_messages = db.get_history(session_id, limit=8)
+                    recent_messages = _db.get_history(session_id, limit=8)
                     suggestions = get_suggestions(session, topic, language, recent_messages=recent_messages)
                 except Exception as recsys_err:
                     logger.warning(f"[RecSys] Hybrid failed, falling back to LLM followups: {recsys_err}")
@@ -1783,9 +1783,9 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             # Falls back to static topic suggestions if RecSys errors.
             from app.services.recsys_service import get_suggestions
             from app.services.topic_service import get_instant_suggestions
-            from app.database import db
+            from app.memory.database import db as _db
             try:
-                recent_messages = db.get_history(session_id, limit=8)
+                recent_messages = _db.get_history(session_id, limit=8)
                 suggestions = get_suggestions(session, topic, language, recent_messages=recent_messages)
             except Exception as recsys_err:
                 logger.warning(f"[RecSys] Hybrid failed, falling back to static: {recsys_err}")
