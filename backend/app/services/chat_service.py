@@ -1654,13 +1654,15 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 logger.error(f"Reasoning trace caching failed: {trace_err}", exc_info=True)
             self._update_topic_memory(session_id, session, topic, response_text)
 
-            # Hybrid RecSys (Phase 1 + Phase 2): chart-signal-aware personalized suggestions.
+            # Hybrid RecSys (Phase 1 + 2 + 3): chart-signal + session-aware suggestions.
             # Falls back to LLM-generated followups if RecSys errors.
             from app.services.recsys_service import get_suggestions
+            from app.database import db
             suggestions = []
             if response_text and len(response_text) > 20:
                 try:
-                    suggestions = get_suggestions(session, topic, language)
+                    recent_messages = db.get_history(session_id, limit=8)
+                    suggestions = get_suggestions(session, topic, language, recent_messages=recent_messages)
                 except Exception as recsys_err:
                     logger.warning(f"[RecSys] Hybrid failed, falling back to LLM followups: {recsys_err}")
                     suggestions = self._safe_generate_followups(response_text, language)
@@ -1777,12 +1779,14 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 logger.error(f"Reasoning trace caching failed: {trace_err}", exc_info=True)
             self._update_topic_memory(session_id, session, topic, full_text)
 
-            # Hybrid RecSys (Phase 1 + Phase 2): chart-signal-aware personalized suggestions.
+            # Hybrid RecSys (Phase 1 + 2 + 3): chart-signal + session-aware suggestions.
             # Falls back to static topic suggestions if RecSys errors.
             from app.services.recsys_service import get_suggestions
             from app.services.topic_service import get_instant_suggestions
+            from app.database import db
             try:
-                suggestions = get_suggestions(session, topic, language)
+                recent_messages = db.get_history(session_id, limit=8)
+                suggestions = get_suggestions(session, topic, language, recent_messages=recent_messages)
             except Exception as recsys_err:
                 logger.warning(f"[RecSys] Hybrid failed, falling back to static: {recsys_err}")
                 suggestions = get_instant_suggestions(topic, language)
