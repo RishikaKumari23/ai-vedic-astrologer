@@ -1654,9 +1654,16 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 logger.error(f"Reasoning trace caching failed: {trace_err}", exc_info=True)
             self._update_topic_memory(session_id, session, topic, response_text)
 
+            # Phase 1 RecSys: personalized suggestions based on chart signals.
+            # Falls back to LLM-generated followups if RecSys returns nothing.
+            from app.services.recsys_service import get_rule_based_suggestions
             suggestions = []
             if response_text and len(response_text) > 20:
-                suggestions = self._safe_generate_followups(response_text, language)
+                try:
+                    suggestions = get_rule_based_suggestions(session, topic, language)
+                except Exception as recsys_err:
+                    logger.warning(f"[RecSys] Phase 1 failed, falling back to LLM followups: {recsys_err}")
+                    suggestions = self._safe_generate_followups(response_text, language)
 
             return {
                 "session_id": session_id, "message": response_text,
@@ -1770,7 +1777,15 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 logger.error(f"Reasoning trace caching failed: {trace_err}", exc_info=True)
             self._update_topic_memory(session_id, session, topic, full_text)
 
-            suggestions = get_instant_suggestions(topic, language)
+            # Phase 1 RecSys: chart-signal-aware personalized suggestions.
+            # Falls back to static topic suggestions if RecSys errors.
+            from app.services.recsys_service import get_rule_based_suggestions
+            from app.services.topic_service import get_instant_suggestions
+            try:
+                suggestions = get_rule_based_suggestions(session, topic, language)
+            except Exception as recsys_err:
+                logger.warning(f"[RecSys] Phase 1 failed, falling back to static: {recsys_err}")
+                suggestions = get_instant_suggestions(topic, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
