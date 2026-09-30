@@ -334,3 +334,281 @@ def get_rule_based_suggestions(
 
     logger.info(f"[RecSys P1] Returning {len(result[:3])} suggestions")
     return result[:3]
+
+
+# =============================================================================
+# PHASE 2 — CONTENT-BASED FILTERING
+# =============================================================================
+"""
+WHAT IS CONTENT-BASED FILTERING? (RecSys Learning Note)
+---------------------------------------------------------
+Content-Based Filtering recommends items by comparing FEATURES of items to
+FEATURES of the user. It does NOT need other users' data — it only needs to
+understand the current user's profile.
+
+Real-world analogy:
+  - Spotify tags every song: genre=["jazz"], tempo="slow", mood="melancholic"
+  - Your listening profile: genre_pref=["jazz","blues"], mood_pref=["melancholic"]
+  - Score = how much the song's features overlap with your preferences
+  - Recommend the highest scoring songs
+
+Our version:
+  - Each question is tagged: dasha_lords=["Saturn"], houses=[10], topics=["career"]
+  - User profile: dasha_lord="Saturn", planets_in_house={10: "Saturn"}, topic="career"
+  - Score = weighted feature intersection (the discrete version of cosine similarity)
+  - Recommend top-scoring questions from the 70-question bank
+
+WHY WEIGHTED FEATURE INTERSECTION INSTEAD OF PURE COSINE SIMILARITY?
+  Pure cosine similarity needs all features to be continuous numbers (floats).
+  Our features are categorical (names of planets, house numbers, topic strings).
+  Weighted feature intersection is the CORRECT mathematical equivalent for
+  categorical feature vectors. It gives the same ranking behavior as cosine
+  similarity but works on symbolic/categorical data.
+
+SCORING FORMULA:
+  score(question, user) = Σ weight_i × match_i
+  where match_i = 1 if feature i matches, 0 otherwise
+  and weight_i is the importance of that feature type
+"""
+
+# Feature weights — how much each type of match contributes to the score
+WEIGHT_DASHA_LORD   = 3.0   # Dasha lord dominates 6-20 years of life → highest weight
+WEIGHT_RETROGRADE   = 2.5   # Retrograde planets have very unusual, specific effects
+WEIGHT_HOUSE        = 2.0   # Specific house match is highly relevant
+WEIGHT_PLANET       = 1.5   # General planet mention
+WEIGHT_TOPIC        = 1.0   # Topic (life area) match
+WEIGHT_ITEM_BASE    = 1.0   # The question's own base weight from the bank
+
+
+def _build_user_profile(session: dict, topic: Optional[str]) -> dict:
+    """
+    Builds the user feature profile — the 'user vector' in Content-Based Filtering.
+
+    This is the equivalent of Spotify building your taste profile from your
+    listening history. Here we build an 'astrological taste profile' from the
+    user's birth chart data.
+
+    Returns a dict with:
+      dasha_lord      : str  — current Mahadasha lord
+      retrograde_set  : set  — names of all retrograde planets
+      house_planet_map: dict — {house_number: planet_name} for sensitive houses
+      planet_set      : set  — all planet names in chart
+      topic           : str  — current conversation topic
+    """
+    profile = {
+        "dasha_lord": "",
+        "retrograde_set": set(),
+        "house_planet_map": {},
+        "planet_set": set(),
+        "topic": topic or "",
+    }
+
+    try:
+        raw = session.get("kundli_raw")
+        if raw:
+            parsed = json.loads(raw)
+            planets: list[dict] = parsed.get("planets", []) or []
+            ascendant_sign: str = parsed.get("ascendant_sign", "")
+
+            for p in planets:
+                p_name = p.get("name", "")
+                p_sign = p.get("sign_name", "")
+                if not p_name:
+                    continue
+                profile["planet_set"].add(p_name)
+                if str(p.get("isRetro", "")).lower() == "true":
+                    profile["retrograde_set"].add(p_name)
+                if p_sign and ascendant_sign:
+                    house = _compute_house(p_sign, ascendant_sign)
+                    if house:
+                        profile["house_planet_map"][house] = p_name
+    except Exception as e:
+        logger.warning(f"[RecSys P2] kundli_raw parse error: {e}")
+
+    try:
+        dasha_raw = session.get("kundli_dasha")
+        if dasha_raw:
+            dasha_info = json.loads(dasha_raw)
+            maha = dasha_info.get("current_mahadasha") or {}
+            profile["dasha_lord"] = maha.get("lord", "")
+    except Exception as e:
+        logger.warning(f"[RecSys P2] kundli_dasha parse error: {e}")
+
+    return profile
+
+
+def _score_question(question: dict, profile: dict) -> float:
+    """
+    Scores a single question against the user profile using Weighted Feature
+    Intersection — the categorical equivalent of cosine similarity.
+
+    Think of it as: 'how many of this question's features match this user's
+    astrological fingerprint, weighted by importance?'
+
+    The score is NOT normalized (unlike cosine similarity which divides by
+    vector magnitudes). We don't need normalization because all questions in
+    the bank have comparable feature cardinality.
+    """
+    score = 0.0
+
+    # Base quality weight of the question itself (from question bank)
+    score += question.get("weight", 1.0) * WEIGHT_ITEM_BASE
+
+    # ── Feature Match 1: Dasha Lord (highest weight) ──────────────────────
+    # "Is this question about the planet that dominates this user's current life phase?"
+    if profile["dasha_lord"] and profile["dasha_lord"] in question["dasha_lords"]:
+        score += WEIGHT_DASHA_LORD
+
+    # ── Feature Match 2: Retrograde Planet ───────────────────────────────
+    # "Is this a retrograde-specific question AND does the user have that planet retrograde?"
+    if question.get("is_retrograde"):
+        for retro_planet in question["planets"]:
+            if retro_planet in profile["retrograde_set"]:
+                score += WEIGHT_RETROGRADE
+                break  # count only once per question
+
+    # ── Feature Match 3: House Match ─────────────────────────────────────
+    # "Does this question focus on a house where the user has a notable planet?"
+    user_houses = set(profile["house_planet_map"].keys())
+    question_houses = set(question["houses"])
+    house_overlap = user_houses & question_houses
+    if house_overlap:
+        score += WEIGHT_HOUSE * len(house_overlap)
+
+    # ── Feature Match 4: Planet Match ────────────────────────────────────
+    # "Does this question mention a planet that is active/notable in the user's chart?"
+    # Active = in Mahadasha, retrograde, or in a sensitive house
+    active_planets = profile["retrograde_set"] | {profile["dasha_lord"]}
+    active_planets.update(profile["house_planet_map"].values())
+    planet_overlap = active_planets & set(question["planets"])
+    if planet_overlap:
+        score += WEIGHT_PLANET * len(planet_overlap)
+
+    # ── Feature Match 5: Topic Match ─────────────────────────────────────
+    # "Does this question's life area match what the user is currently asking about?"
+    if profile["topic"] and profile["topic"] in question["topics"]:
+        score += WEIGHT_TOPIC
+
+    return score
+
+
+def get_content_based_suggestions(
+    session: dict,
+    topic: Optional[str],
+    language: str = "English",
+    exclude: Optional[list[str]] = None
+) -> list[str]:
+    """
+    Phase 2 RecSys — Content-Based Filtering.
+
+    Steps:
+    1. Build the user feature profile (the 'user vector') from chart data
+    2. Score every question in the Question Bank against the user profile
+    3. Sort by score descending, exclude questions already shown by Phase 1
+    4. Return the top 3
+
+    This gives questions the RULE ENGINE (Phase 1) might miss — especially
+    questions about the user's chart that aren't covered by the priority rules.
+    For example, a Jupiter in 9th house question would only appear via Phase 2
+    since Phase 1 only handles the top-priority Mahadasha signal.
+
+    RecSys Theory:
+    This is a "User-to-Item" recommendation: we represent the user as a feature
+    vector and score items (questions) by their feature overlap with the user.
+    The absence of other users' data is exactly why this is called "Content-Based"
+    (vs Collaborative Filtering which uses other users' behavior).
+    """
+    from app.data.question_bank import QUESTION_BANK
+
+    excluded_set = set(exclude or [])
+
+    # Step 1: Build user profile
+    profile = _build_user_profile(session, topic)
+    logger.info(
+        f"[RecSys P2] User profile: dasha={profile['dasha_lord']}, "
+        f"retro={profile['retrograde_set']}, "
+        f"houses={list(profile['house_planet_map'].keys())[:5]}, "
+        f"topic={profile['topic']}"
+    )
+
+    # Step 2: Score all questions
+    scored: list[tuple[float, str]] = []
+    for q in QUESTION_BANK:
+        if q["text"] in excluded_set:
+            continue
+        score = _score_question(q, profile)
+        scored.append((score, q["text"]))
+
+    # Step 3: Sort by score descending
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    if scored:
+        logger.info(
+            f"[RecSys P2] Top scores: "
+            + " | ".join(f"{s:.1f}" for s, _ in scored[:5])
+        )
+
+    # Step 4: Return top 3 question texts
+    result = [text for _, text in scored[:3]]
+    logger.info(f"[RecSys P2] Returning {len(result)} content-based suggestions")
+    return result
+
+
+# =============================================================================
+# HYBRID SCORER — Combines Phase 1 + Phase 2
+# =============================================================================
+"""
+HYBRID RECOMMENDER SYSTEM (RecSys Learning Note)
+--------------------------------------------------
+Real production systems (Netflix, Spotify, Amazon) combine multiple recommenders
+into a Hybrid System, because each approach has different strengths and blind spots:
+
+  Phase 1 (Rule-Based):   high precision, low diversity, works cold-start
+  Phase 2 (Content-Based): high diversity, personalized, wider coverage
+
+Our blending strategy:
+  - Run Phase 1 → get its top 2 suggestions (precision signals)
+  - Run Phase 2 → get top 3 suggestions, EXCLUDING Phase 1 results (diversity)
+  - Final output: [P1[0], P1[1], P2[0]]  → 3 suggestions total
+
+This is called a "Cascade Hybrid" — Phase 1 runs first and Phase 2 fills the gaps.
+A more advanced approach (Phase 3) will re-rank all candidates using session context.
+"""
+
+
+def get_suggestions(
+    session: dict,
+    topic: Optional[str],
+    language: str = "English"
+) -> list[str]:
+    """
+    Main entry point for the Next-Best-Action RecSys.
+    Combines Phase 1 (Rule-Based) + Phase 2 (Content-Based) in a Cascade Hybrid.
+
+    Blend ratio:
+      2 from Phase 1 (rule-based precision) + 1 from Phase 2 (content diversity)
+      = 3 suggestions total
+    """
+    # Phase 1: precision signals
+    p1_results = get_rule_based_suggestions(session, topic, language)
+
+    # Phase 2: content-based diversity (exclude Phase 1 results)
+    p2_results = get_content_based_suggestions(
+        session, topic, language, exclude=p1_results
+    )
+
+    # Cascade blend: 2 from Phase 1, 1 fresh from Phase 2
+    combined: list[str] = []
+    combined.extend(p1_results[:2])
+    if p2_results:
+        combined.append(p2_results[0])
+
+    # Pad to 3 with remaining Phase 1 or Phase 2 if needed
+    for extra in p1_results[2:] + p2_results[1:]:
+        if len(combined) >= 3:
+            break
+        if extra not in combined:
+            combined.append(extra)
+
+    logger.info(f"[RecSys Hybrid] Final 3 suggestions ready (P1×2 + P2×1)")
+    return combined[:3]
