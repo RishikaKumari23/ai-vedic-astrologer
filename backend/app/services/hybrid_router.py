@@ -99,10 +99,17 @@ _KEYWORD_MAP: dict[str, str] = {
 }
 
 
+_COMPILED_KEYWORD_PATTERNS = [
+    (re.compile(rf"\b{re.escape(kw)}\b"), topic)
+    for kw, topic in _KEYWORD_MAP.items()
+]
+
+
 def _keyword_classify(text: str) -> Optional[str]:
+    """Whole-word regex keyword matcher (prevents 'son' in 'reason', 'date' in 'update')."""
     text_lower = text.lower()
-    for kw, topic in _KEYWORD_MAP.items():
-        if kw in text_lower:
+    for pattern, topic in _COMPILED_KEYWORD_PATTERNS:
+        if pattern.search(text_lower):
             return topic
     return None
 

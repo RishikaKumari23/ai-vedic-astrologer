@@ -3,6 +3,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 import json
 import re
+import threading
 from app.memory.database import db
 from app.services.llm_service import llm_service
 from app.services.geocoding_service import geocoding_service
@@ -10,7 +11,7 @@ from app.services.kundli_service import kundli_service
 from app.rag.vector_store import vector_store
 from app.rag.embeddings import EmbeddingsProvider
 from app.rag.reranker import reranker
-from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
+from app.prompts.templates import ASTROLOGER_PROMPT, THEORETICAL_ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
 from app.services.intent_service import classify_intent, get_response_contract
@@ -25,6 +26,7 @@ from app.services.topic_service import (
     get_evidence_consensus_label, get_consensus_instruction
 )
 from app.services.hybrid_router import route_topic
+from app.services.query_synthesizer import classify_query_mode, synthesize_rag_query
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 from app.services.transit_service import transit_service
@@ -610,11 +612,18 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         self._save_intent_cache(session_id, session, query_understanding, fast_topic)
         return query_understanding
 
-    def _resolve_topic(self, message_text: str, query_understanding: Dict[str, Any]) -> Optional[str]:
+    def _resolve_topic(self, message_text: str, query_understanding: Dict[str, Any], topic_result: Optional[Any] = None) -> Optional[str]:
+        if topic_result and getattr(topic_result, "topic", None) in TOPIC_CHART_FACTORS:
+            logger.info(
+                f"[TopicResolution] hybrid_router matched topic='{topic_result.topic}' "
+                f"(method={topic_result.method}, conf={topic_result.confidence:.2f})"
+            )
+            return topic_result.topic
+
         life_area = (query_understanding.get("life_area") or "").strip().lower()
 
         if life_area and life_area in TOPIC_CHART_FACTORS:
-            logger.info(f"[TopicResolution] using life_area='{life_area}' as topic (primary)")
+            logger.info(f"[TopicResolution] using life_area='{life_area}' as topic")
             return life_area
 
         fallback = classify_topic(message_text)
@@ -809,13 +818,15 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             logger.error(f"Failed to save framework cache for '{topic}': {e}")
 
     def _get_rag_first_context(self, session_id: str, message_text: str, topic: Optional[str], session: Dict,
-                                 query_understanding: Optional[Dict[str, Any]] = None):
+                                 query_understanding: Optional[Dict[str, Any]] = None,
+                                 synthesized_query: Optional[str] = None):
         try:
             from app.services.topic_service import TOPIC_RELEVANT_BOOKS
 
             qu = query_understanding or {}
             life_area = qu.get("life_area") or ""
             comparison = qu.get("comparison") or []
+            retrieval_query = synthesized_query or message_text
 
             # Adaptive RAG depth — compute once per question, use throughout
             depth = self._compute_retrieval_depth(message_text, qu)
@@ -840,16 +851,17 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 if cached_context:
                     framework_chunks.append(cached_context)
             else:
-                framework_query = self._build_framework_query(message_text, topic, life_area, session)
+                framework_query = self._build_framework_query(retrieval_query, topic, life_area, session)
                 framework_hits_raw = vector_store.dual_retrieve(
                     topic_query=framework_query,
-                    global_query=message_text,
+                    global_query=retrieval_query,
                     query_vector_topic=self.embeddings_provider.get_embedding(framework_query),
-                    query_vector_global=self.embeddings_provider.get_embedding(message_text),
+                    query_vector_global=self.embeddings_provider.get_embedding(retrieval_query),
                     preferred_sources=preferred_sources,
                     top_k_each=depth["framework_max"],
                     final_top_k=depth["framework_max"],
                     alpha=settings.HYBRID_ALPHA,
+                    rerank=False,  # Cross-Encoder runs once below after dedup
                 )
                 framework_hits_raw = [h for h in framework_hits_raw if h["score"] >= settings.MIN_RAG_RELEVANCE]
 
@@ -990,6 +1002,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 top_k_each=depth["personalized_max"] + 2,  # headroom before dedup
                 final_top_k=depth["personalized_max"] + 2,
                 alpha=settings.HYBRID_ALPHA,
+                rerank=False,  # Cross-Encoder runs once below after dedup
             )
             personalized_hits_raw = [h for h in personalized_hits_raw if h["score"] >= settings.MIN_RAG_RELEVANCE]
 
@@ -1368,6 +1381,13 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
     def _prepare_common_context(self, session_id: str, message_text: str, history: List[Dict[str, str]],
                                   history_text: str, session: Dict, language: str):
+        # 3-layer Hybrid Topic Router (Keyword -> Semantic -> LLM + Adaptive Cache)
+        topic_result = None
+        try:
+            topic_result = route_topic(message_text, self.embeddings_provider)
+        except Exception as route_err:
+            logger.warning(f"[HybridRouter] route_topic failed, continuing with fallback: {route_err}")
+
         query_understanding = self._get_query_understanding_cached(session_id, message_text, history_text, session)
         logger.info(
             f"[QueryUnderstanding] life_area='{query_understanding['life_area']}' "
@@ -1376,9 +1396,20 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             f"requires_timing={query_understanding.get('requires_timing')}"
         )
 
-        topic = self._resolve_topic(message_text, query_understanding)
+        topic = self._resolve_topic(message_text, query_understanding, topic_result=topic_result)
         intent = classify_intent(message_text)
         response_contract = get_response_contract(intent)
+
+        # Query Mode Classifier ("theoretical" vs "personal") & Universal Query Synthesizer
+        query_mode = classify_query_mode(message_text)
+        synthesized_query = synthesize_rag_query(
+            message_text,
+            topic=topic,
+            detected_houses=getattr(topic_result, "detected_houses", None),
+            detected_concepts=getattr(topic_result, "detected_concepts", None),
+            query_mode=query_mode,
+        )
+        logger.info(f"[QuerySynthesizer] mode={query_mode} synthesized='{synthesized_query[:100]}'")
 
         cached_kundli = session.get("kundli_data")
         kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
@@ -1389,7 +1420,10 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         if self._is_followup_retrieval_question(message_text, history):
             context_str, rag_hits = self._get_followup_rag_context(message_text, topic, history)
         if not rag_hits:
-            context_str, rag_hits, targeted_facts = self._get_rag_first_context(session_id, message_text, topic, session, query_understanding)
+            context_str, rag_hits, targeted_facts = self._get_rag_first_context(
+                session_id, message_text, topic, session, query_understanding,
+                synthesized_query=synthesized_query,
+            )
         logger.info(f"[RAGPipeline] hits={len(rag_hits)} targeted_facts={'yes' if targeted_facts else 'no'}")
 
         yoga_text = self._get_yoga_text(session)
@@ -1462,9 +1496,21 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         user_memory = self._get_user_memory_block(session, topic)
         repeat_hint = self._get_repeat_topic_hint(session, topic)
 
+        # Chain-of-Thought pre-reasoning step for personal chart questions
+        cot_facts = ""
+        if query_mode == "personal" and final_kundli_data:
+            cot_facts = self._run_chain_of_thought(
+                message_text, final_kundli_data, dasha_timeline_str, topic or "general", language
+            )
+
         return {
             "query_understanding": query_understanding,
             "topic": topic,
+            "intent": intent,
+            "query_mode": query_mode,
+            "topic_result": topic_result,
+            "synthesized_query": synthesized_query,
+            "cot_facts": cot_facts,
             "response_contract": response_contract,
             "context_str": context_str,
             "rag_hits": rag_hits,
@@ -1480,6 +1526,26 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
     def _build_astrologer_prompt(self, session: Dict, language: str, history_text: str,
                                    message_text: str, ctx: Dict[str, Any]) -> str:
+        if ctx.get("query_mode") == "theoretical":
+            ascendant_sign = "Unknown"
+            actual_placement = ctx.get("chart_ground_truth") or "Not available."
+            try:
+                raw = session.get("kundli_raw")
+                if raw:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    ascendant_sign = parsed.get("ascendant_sign") or "Unknown"
+            except Exception:
+                pass
+            return THEORETICAL_ASTROLOGER_PROMPT.format(
+                language=language,
+                name=session.get("name") or "Friend",
+                ascendant_sign=ascendant_sign,
+                actual_placement=actual_placement,
+                context=ctx["context_str"] or "No book context.",
+                history=history_text,
+                query=message_text,
+            )
+
         prompt = ASTROLOGER_PROMPT.format(
             name=session.get("name") or "Friend",
             language=language, dob=session.get("dob") or "Not provided",
@@ -1497,14 +1563,20 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
             chart_ground_truth=ctx.get("chart_ground_truth") or "Chart data not available.",
             history=history_text, query=message_text
         )
+        if ctx.get("cot_facts"):
+            prompt += (
+                "\n\nINTERNAL REASONING FACTS (use these verified points to guide your reply; "
+                "do NOT output them as a numbered list):\n"
+                f"{ctx['cot_facts']}"
+            )
         if ctx["repeat_hint"]:
             prompt += f"\n\n{ctx['repeat_hint']}"
         prompt += f"\n\n{self._build_temporal_context()}"
         return prompt
 
     def _generate_and_validate(self, session_id: str, session: Dict, astrologer_prompt: str,
-                                 dasha_timeline_str: str, evidence_vote) -> str:
-        response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
+                                 dasha_timeline_str: str, evidence_vote, temperature: float = 0.6) -> str:
+        response_text = llm_service.generate(prompt=astrologer_prompt, temperature=temperature)
 
         recent_texts = self._get_recent_assistant_texts(session_id)
         similar_to = self._is_too_similar(response_text, recent_texts)
@@ -1572,7 +1644,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         try:
             session = db.get_or_create_session(session_id)
             history = db.get_history(session_id, limit=10)
-            history_text = self._format_history_for_llm(history)
+            history_text = self._get_context_window(session_id, session)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -1638,14 +1710,19 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
             try:
                 astrologer_prompt = self._build_astrologer_prompt(session, language, history_text, message_text, ctx)
+                gen_temp = self._get_temperature(ctx.get("intent", "general"), ctx.get("repeat_hint", ""))
                 response_text = self._generate_and_validate(
-                    session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"]
+                    session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"],
+                    temperature=gen_temp,
                 )
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
 
             db.add_message(session_id, "assistant", response_text)
+            threading.Thread(
+                target=self._update_rolling_summary, args=(session_id, dict(session)), daemon=True
+            ).start()
 
             try:
                 trace = self._build_reasoning_trace(session, topic, ctx["rag_hits"], ctx["targeted_facts"], response_text, ctx["query_understanding"])
@@ -1687,7 +1764,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         try:
             session = db.get_or_create_session(session_id)
             history = db.get_history(session_id, limit=10)
-            history_text = self._format_history_for_llm(history)
+            history_text = self._get_context_window(session_id, session)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -1760,8 +1837,10 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
             try:
                 astrologer_prompt = self._build_astrologer_prompt(session, language, history_text, message_text, ctx)
+                gen_temp = self._get_temperature(ctx.get("intent", "general"), ctx.get("repeat_hint", ""))
                 full_text = self._generate_and_validate(
-                    session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"]
+                    session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"],
+                    temperature=gen_temp,
                 )
             except Exception as gen_err:
                 logger.error(f"Streaming generation failed: {gen_err}")
@@ -1771,6 +1850,9 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 yield {"type": "chunk", "text": chunk}
 
             db.add_message(session_id, "assistant", full_text)
+            threading.Thread(
+                target=self._update_rolling_summary, args=(session_id, dict(session)), daemon=True
+            ).start()
 
             try:
                 trace = self._build_reasoning_trace(session, topic, ctx["rag_hits"], ctx["targeted_facts"], full_text, ctx["query_understanding"])

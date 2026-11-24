@@ -1,4 +1,5 @@
 
+import re
 from typing import Dict, Any, List, Optional, Set
 from app.services.kundli_service import get_house_lord
 
@@ -136,12 +137,18 @@ EVIDENCE_WEIGHTS = {
 }
 
 
+_TOPIC_KEYWORD_PATTERNS = [
+    (topic, [re.compile(rf"\b{re.escape(kw)}\b") for kw in config["keywords"]])
+    for topic, config in TOPIC_CHART_FACTORS.items()
+]
+
+
 def classify_topic(message: str) -> Optional[str]:
-    """Simple keyword-based topic classifier."""
+    """Keyword-based topic classifier using whole-word regex boundaries."""
     text_lower = message.lower()
-    for topic, config in TOPIC_CHART_FACTORS.items():
-        for kw in config["keywords"]:
-            if kw in text_lower:
+    for topic, patterns in _TOPIC_KEYWORD_PATTERNS:
+        for pattern in patterns:
+            if pattern.search(text_lower):
                 return topic
     return None
 

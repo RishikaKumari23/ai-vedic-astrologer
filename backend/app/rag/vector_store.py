@@ -1,153 +1,35 @@
 import os
+import re
 import json
+import math
 import threading
+from collections import Counter, defaultdict
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Tuple, Optional
 
 from app.config.settings import settings
+from app.rag.reranker import reranker
 from app.utils.logger import logger
 
 
 VECTOR_STORE_V2_ACTIVE = True
 
-
-# ---------------------------------------------------------------------------
-# Cross-Encoder Re-Ranker
-# ---------------------------------------------------------------------------
-# Hybrid search remains the first-stage retriever.
-# The Cross-Encoder is a second-stage relevance judge over the merged
-# candidate set. If sentence-transformers/model loading is unavailable,
-# retrieval automatically falls back to the existing hybrid-score ordering.
-#
-# This keeps the user's existing RAG pipeline intact:
-# Hybrid Search -> Merge/Deduplicate -> Cross-Encoder -> Final Evidence
-# ---------------------------------------------------------------------------
-
-class CrossEncoderReRanker:
-    """
-    Lazy-loading Cross-Encoder wrapper.
-
-    The model is loaded only on first rerank() call, so server startup is not
-    blocked by model initialization.
-    """
-
-    def __init__(
-        self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    ):
-        self.model_name = model_name
-        self._model = None
-        self._load_lock = threading.Lock()
-
-    def _load_model(self):
-        if self._model is not None:
-            return
-
-        with self._load_lock:
-            if self._model is not None:
-                return
-
-            try:
-                from sentence_transformers import CrossEncoder
-
-                logger.info(
-                    f"[ReRanker] Loading Cross-Encoder model: "
-                    f"{self.model_name}"
-                )
-
-                self._model = CrossEncoder(
-                    self.model_name,
-                    max_length=512
-                )
-
-                logger.info(
-                    "[ReRanker] Cross-Encoder model loaded successfully."
-                )
-
-            except ImportError:
-                logger.error(
-                    "[ReRanker] sentence-transformers is not installed. "
-                    "Cross-Encoder re-ranking disabled."
-                )
-                self._model = None
-
-            except Exception as e:
-                logger.error(
-                    f"[ReRanker] Failed to load Cross-Encoder model: {e}"
-                )
-                self._model = None
-
-    def rerank(
-        self,
-        query: str,
-        chunks: List[Dict],
-        top_k: int = 6,
-    ) -> List[Dict]:
-        """
-        Re-rank retrieved chunks using the Cross-Encoder.
-
-        The original hybrid score is preserved as `score`; the Cross-Encoder
-        result is stored separately as `rerank_score`.
-        """
-        if not chunks:
-            return []
-
-        self._load_model()
-
-        if self._model is None:
-            logger.warning(
-                "[ReRanker] Model unavailable -- "
-                "returning chunks in hybrid-score order."
-            )
-            return chunks[:top_k]
-
-        try:
-            pairs = [
-                [query, chunk.get("text", "")]
-                for chunk in chunks
-            ]
-
-            scores = self._model.predict(pairs)
-
-            scored_chunks = []
-
-            for chunk, score in zip(chunks, scores):
-                scored = chunk.copy()
-                scored["rerank_score"] = float(score)
-                scored_chunks.append(scored)
-
-            scored_chunks.sort(
-                key=lambda c: c["rerank_score"],
-                reverse=True
-            )
-
-            logger.info(
-                f"[ReRanker] Re-ranked {len(chunks)} candidates "
-                f"-> keeping top {top_k}"
-            )
-
-            for i, chunk in enumerate(scored_chunks[:top_k]):
-                metadata = chunk.get("metadata", {})
-
-                logger.info(
-                    f"[ReRanker] #{i + 1} "
-                    f"rerank={chunk['rerank_score']:.3f} "
-                    f"hybrid={chunk.get('score', 0):.3f} "
-                    f"source={metadata.get('source', 'Unknown')}"
-                )
-
-            return scored_chunks[:top_k]
-
-        except Exception as e:
-            logger.error(
-                f"[ReRanker] Re-ranking failed: {e} -- "
-                "falling back to hybrid score order."
-            )
-            return chunks[:top_k]
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_BM25_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but",
+    "if", "then", "of", "to", "in", "on",
+    "at", "by", "for", "with", "is", "are",
+    "was", "were", "be", "been", "being",
+}
 
 
-reranker = CrossEncoderReRanker()
+def _tokenize(text: str) -> List[str]:
+    """Lowercase whole-word tokenizer for BM25 indexing and querying."""
+    return [
+        tok for tok in _TOKEN_RE.findall(text.lower())
+        if len(tok) > 1 and tok not in _BM25_STOP_WORDS
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -168,18 +50,74 @@ class LocalVectorStore:
         self._normalized_vectors: Optional[np.ndarray] = None
         self._norm_lock = threading.Lock()
 
+        # Okapi BM25 inverted index (k1=1.5, b=0.75) for fast sparse retrieval.
+        self._bm25_k1: float = 1.5
+        self._bm25_b: float = 0.75
+        self._bm25_doc_lens: np.ndarray = np.array([], dtype=np.float32)
+        self._bm25_avgdl: float = 1.0
+        self._bm25_idf: Dict[str, float] = {}
+        # Maps token -> (doc_ids np.ndarray[int32], term_freqs np.ndarray[float32])
+        self._bm25_postings: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
         # Used to protect against embedding-model dimension mismatches.
         self._embedding_dim: Optional[int] = None
 
         logger.info(
             "[VectorStore] VECTOR_STORE_V2_ACTIVE — "
-            "dimension-mismatch guard enabled"
+            "BM25 inverted index + dimension-mismatch guard enabled"
         )
 
         self.load()
 
+    def _rebuild_bm25_index(self):
+        """Build an in-memory Okapi BM25 inverted index over self.chunks."""
+        n_docs = len(self.chunks)
+        if n_docs == 0:
+            self._bm25_doc_lens = np.array([], dtype=np.float32)
+            self._bm25_avgdl = 1.0
+            self._bm25_idf = {}
+            self._bm25_postings = {}
+            return
+
+        doc_lens = np.zeros(n_docs, dtype=np.float32)
+        raw_postings: Dict[str, Tuple[List[int], List[int]]] = defaultdict(lambda: ([], []))
+
+        for doc_id, chunk in enumerate(self.chunks):
+            tokens = _tokenize(chunk.get("text", ""))
+            doc_lens[doc_id] = float(len(tokens))
+            if not tokens:
+                continue
+            tf_counts = Counter(tokens)
+            for tok, tf in tf_counts.items():
+                ids_list, tfs_list = raw_postings[tok]
+                ids_list.append(doc_id)
+                tfs_list.append(tf)
+
+        self._bm25_doc_lens = doc_lens
+        avgdl = float(doc_lens.mean()) if n_docs > 0 else 1.0
+        self._bm25_avgdl = avgdl if avgdl > 0.0 else 1.0
+
+        idf: Dict[str, float] = {}
+        postings: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        for tok, (ids_list, tfs_list) in raw_postings.items():
+            df = len(ids_list)
+            # Non-negative Okapi BM25 IDF (Lucene variant)
+            idf[tok] = math.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
+            postings[tok] = (
+                np.asarray(ids_list, dtype=np.int32),
+                np.asarray(tfs_list, dtype=np.float32),
+            )
+
+        self._bm25_idf = idf
+        self._bm25_postings = postings
+        logger.info(
+            f"[VectorStore] BM25 index built: {n_docs} docs, "
+            f"{len(postings)} unique terms, avgdl={self._bm25_avgdl:.1f}"
+        )
+
     def _rebuild_normalized_cache(self):
         with self._norm_lock:
+            self._rebuild_bm25_index()
             if self.vectors is None or len(self.vectors) == 0:
                 self._normalized_vectors = None
                 self._embedding_dim = None
@@ -290,6 +228,7 @@ class LocalVectorStore:
         self.vectors = None
         self._normalized_vectors = None
         self._embedding_dim = None
+        self._rebuild_bm25_index()
 
         if os.path.exists(self.chunks_path):
             os.remove(self.chunks_path)
@@ -372,26 +311,28 @@ class LocalVectorStore:
         self._rebuild_normalized_cache()
         self.save()
 
-    def _lexical_score(
-        self,
-        text: str,
-        query_tokens: List[str]
-    ) -> float:
-        if not query_tokens:
-            return 0.0
+    def _bm25_scores(self, query_tokens: List[str]) -> np.ndarray:
+        """Compute Okapi BM25 scores across all chunks using the inverted index."""
+        n_docs = len(self.chunks)
+        scores = np.zeros(n_docs, dtype=np.float32)
+        if not query_tokens or n_docs == 0 or not self._bm25_postings:
+            return scores
 
-        text_lower = text.lower()
-        score = 0.0
+        k1 = self._bm25_k1
+        b = self._bm25_b
+        avgdl = self._bm25_avgdl
+        doc_lens = self._bm25_doc_lens
 
         for token in query_tokens:
-            count = text_lower.count(token)
+            posting = self._bm25_postings.get(token)
+            if posting is None:
+                continue
+            doc_ids, tfs = posting
+            idf = self._bm25_idf[token]
+            denom = tfs + k1 * (1.0 - b + b * (doc_lens[doc_ids] / avgdl))
+            scores[doc_ids] += idf * (tfs * (k1 + 1.0)) / denom
 
-            if count > 0:
-                score += 1.0 + np.log(count)
-
-        return score / (
-            np.log(len(text_lower)) + 1.0
-        )
+        return scores
 
     def _check_dim_match(
         self,
@@ -481,29 +422,8 @@ class LocalVectorStore:
             else np.ones_like(cosine_scores)
         )
 
-        stop_words = {
-            "a", "an", "the", "and", "or", "but",
-            "if", "then", "of", "to", "in", "on",
-            "at", "by", "for", "with", "is", "are",
-            "was", "were", "be", "been", "being"
-        }
-
-        query_tokens = [
-            token.lower()
-            for token in query.split()
-            if (
-                token.lower() not in stop_words
-                and len(token) > 1
-            )
-        ]
-
-        lexical_scores = np.array([
-            self._lexical_score(
-                chunk["text"],
-                query_tokens
-            )
-            for chunk in self.chunks
-        ])
+        query_tokens = _tokenize(query)
+        lexical_scores = self._bm25_scores(query_tokens)
 
         min_lex = lexical_scores.min()
         max_lex = lexical_scores.max()
@@ -580,7 +500,8 @@ class LocalVectorStore:
         preferred_sources: Optional[List[str]] = None,
         top_k_each: int = 6,
         final_top_k: int = 6,
-        alpha: float = 0.5
+        alpha: float = 0.5,
+        rerank: bool = True,
     ) -> List[Dict]:
         """
         Two-stage retrieval:
@@ -671,7 +592,9 @@ class LocalVectorStore:
         if not candidates:
             return []
 
-        
+        if not rerank:
+            return candidates[:final_top_k]
+
         reranked = reranker.rerank(
             query=global_query,
             chunks=candidates,

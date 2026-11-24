@@ -13,7 +13,7 @@ Call-Astro is a production-ready, context-aware chatbot designed to behave exact
 - **Conversational Memory**: Persists profile state and conversation history in an SQLite database.
 - **Deep Astrological Calculations**: Automatically computes exact planetary houses, Nakshatras, and Star Lords from APIs to provide highly accurate chart readings without LLM hallucinations.
 - **Smart Instant Suggestions**: Dynamically displays categorized, non-repeating contextual follow-up questions to keep users engaged.
-- **Hybrid RAG Pipeline**: Combines Vector Similarity Search (dense semantic embeddings via Ollama) and Lexical Matching (TF-IDF keyword score) to retrieve segments from scanned books.
+- **Hybrid RAG Pipeline**: Combines Vector Similarity Search (dense semantic embeddings via Sentence-Transformers/Ollama) and Lexical Matching (Okapi BM25 inverted index) with Cross-Encoder re-ranking to retrieve segments from classical texts.
 - **Local NumPy-based Vector Store**: Lightweight, fast, and robust vector search written in Python with no compiled C-library compilation dependencies (ideal for out-of-the-box Windows execution).
 - **Modern Minimal UI**: Minimalist, clean, white, mobile-friendly ChatGPT-style interface built in React + TypeScript + Tailwind CSS with auto-scroll and profile sidecards.
 - **Docker-Compose Ready**: Ready to be orchestrated and run in containers.
