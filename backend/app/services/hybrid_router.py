@@ -372,10 +372,27 @@ def _adapt_anchor_cache(topic: str, text: str, embeddings_provider: "EmbeddingsP
     except Exception as e:
         logger.warning(f"HybridRouter: Adaptive cache update failed: {e}")
 
-def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> TopicResult:
+def update_adaptive_cache(topic: str, text: str, embeddings_provider: "EmbeddingsProvider") -> None:
+    """Trigger background adaptive anchor update when an LLM resolves a topic."""
+    if not topic:
+        return
+    threading.Thread(
+        target=_adapt_anchor_cache,
+        args=(topic, text, embeddings_provider),
+        daemon=True,
+        name="hybrid-router-adaptive",
+    ).start()
+
+
+def route_topic(
+    message: str,
+    embeddings_provider: "EmbeddingsProvider",
+    allow_llm: bool = True,
+) -> TopicResult:
     """
     Classify a user message into a topic using the 3-layer hybrid pipeline.
-    This is a synchronous function safe to call from both sync and async contexts.
+    Pass allow_llm=False when the caller already runs a context-aware LLM
+    understanding step, avoiding duplicate LLM calls.
     """
     if not message or not message.strip():
         return TopicResult(topic=None, method="none", confidence=0.0)
@@ -407,6 +424,15 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
             detected_concepts=detected_concepts,
         )
 
+    if not allow_llm:
+        return TopicResult(
+            topic=None,
+            method="none",
+            confidence=0.0,
+            detected_houses=detected_houses,
+            detected_concepts=detected_concepts,
+        )
+
     # ── Layer 3: LLM structured output ─────────────────────────────────────
     logger.info(f"HybridRouter L3 (LLM): classifying '{message[:60]}…'")
     llm_topic, llm_houses, llm_concepts, llm_summary = _llm_classify(message)
@@ -420,12 +446,7 @@ def route_topic(message: str, embeddings_provider: "EmbeddingsProvider") -> Topi
     # Adaptive Cache Improvement: If Layer 3 found a valid topic, 
     # learn from it by updating the semantic anchors in the background
     if llm_topic:
-        threading.Thread(
-            target=_adapt_anchor_cache,
-            args=(llm_topic, message, embeddings_provider),
-            daemon=True,
-            name="hybrid-router-adaptive"
-        ).start()
+        update_adaptive_cache(llm_topic, message, embeddings_provider)
 
     return TopicResult(
         topic=llm_topic,

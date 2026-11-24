@@ -25,7 +25,7 @@ from app.services.topic_service import (
     build_evidence_vote, format_evidence_vote_for_prompt,
     get_evidence_consensus_label, get_consensus_instruction
 )
-from app.services.hybrid_router import route_topic
+from app.services.hybrid_router import route_topic, update_adaptive_cache
 from app.services.query_synthesizer import classify_query_mode, synthesize_rag_query
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
@@ -72,15 +72,23 @@ class ChatService:
         return "\n".join(formatted)
 
     def _get_context_window(self, session_id: str, session: dict) -> str:
-        """Returns the formatted context: [Rolling Summary] + [Last 4 messages]."""
-        summary = session.get("conversation_summary")
-        # Only fetch last 4 messages (2 Q&A pairs) to save context
-        recent_history = db.get_history(session_id, limit=4)
-        recent_text = self._format_history_for_llm(recent_history)
+        """Returns the formatted context: [Rolling Summary] + all unsummarized messages.
 
-        if summary:
+        Slicing from last_summarized_msg_count guarantees zero gap between the
+        summary and recent messages (and preserves early turns before the first
+        summary is created).
+        """
+        summary = session.get("conversation_summary")
+        last_count = session.get("last_summarized_msg_count") or 0
+        full_history = db.get_history(session_id, limit=100)
+
+        if summary and last_count > 0:
+            unsummarized = full_history[last_count:]
+            recent_text = self._format_history_for_llm(unsummarized)
             return f"[SUMMARY OF EARLIER CONVERSATION]: {summary}\n\n[RECENT MESSAGES]:\n{recent_text}"
-        return recent_text
+
+        # Before first summary exists, keep up to the last 10 messages (no regression)
+        return self._format_history_for_llm(full_history[-10:])
 
     def _update_rolling_summary(self, session_id: str, session: dict) -> None:
         """Runs in background. Every 8 unsummarized messages, summarizes the oldest 6."""
@@ -589,8 +597,15 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         except Exception as e:
             logger.error(f"Failed to save intent cache: {e}")
 
-    def _get_query_understanding_cached(self, session_id: str, message_text: str, history_text: str, session: Dict) -> Dict[str, Any]:
-        fast_topic = classify_topic(message_text)
+    def _get_query_understanding_cached(
+        self,
+        session_id: str,
+        message_text: str,
+        history_text: str,
+        session: Dict,
+        fast_topic_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        fast_topic = fast_topic_override if fast_topic_override is not None else classify_topic(message_text)
         cached = self._get_intent_cache(session)
         looks_comparative = any(w in f" {message_text.lower()} " for w in COMPARISON_HINT_WORDS)
 
@@ -613,18 +628,19 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         return query_understanding
 
     def _resolve_topic(self, message_text: str, query_understanding: Dict[str, Any], topic_result: Optional[Any] = None) -> Optional[str]:
+        # Priority 1: Context-aware LLM life_area (understands conversation history)
+        life_area = (query_understanding.get("life_area") or "").strip().lower()
+        if life_area and life_area in TOPIC_CHART_FACTORS:
+            logger.info(f"[TopicResolution] using context-aware life_area='{life_area}' as topic")
+            return life_area
+
+        # Priority 2: Hybrid router L1 (keyword) / L2 (semantic) match
         if topic_result and getattr(topic_result, "topic", None) in TOPIC_CHART_FACTORS:
             logger.info(
                 f"[TopicResolution] hybrid_router matched topic='{topic_result.topic}' "
                 f"(method={topic_result.method}, conf={topic_result.confidence:.2f})"
             )
             return topic_result.topic
-
-        life_area = (query_understanding.get("life_area") or "").strip().lower()
-
-        if life_area and life_area in TOPIC_CHART_FACTORS:
-            logger.info(f"[TopicResolution] using life_area='{life_area}' as topic")
-            return life_area
 
         fallback = classify_topic(message_text)
         logger.info(
@@ -1381,14 +1397,19 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
     def _prepare_common_context(self, session_id: str, message_text: str, history: List[Dict[str, str]],
                                   history_text: str, session: Dict, language: str):
-        # 3-layer Hybrid Topic Router (Keyword -> Semantic -> LLM + Adaptive Cache)
+        # Fast L1 (keyword) + L2 (semantic) hybrid topic router — allow_llm=False
+        # so we never make a duplicate LLM classification call alongside
+        # _get_query_understanding_cached below.
         topic_result = None
         try:
-            topic_result = route_topic(message_text, self.embeddings_provider)
+            topic_result = route_topic(message_text, self.embeddings_provider, allow_llm=False)
         except Exception as route_err:
             logger.warning(f"[HybridRouter] route_topic failed, continuing with fallback: {route_err}")
 
-        query_understanding = self._get_query_understanding_cached(session_id, message_text, history_text, session)
+        query_understanding = self._get_query_understanding_cached(
+            session_id, message_text, history_text, session,
+            fast_topic_override=getattr(topic_result, "topic", None),
+        )
         logger.info(
             f"[QueryUnderstanding] life_area='{query_understanding['life_area']}' "
             f"restated='{query_understanding['restated_intent']}' "
@@ -1397,6 +1418,11 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         )
 
         topic = self._resolve_topic(message_text, query_understanding, topic_result=topic_result)
+
+        # If L1+L2 missed but context-aware LLM resolved a topic, feed it into
+        # the Adaptive Cache so future similar queries hit L2 directly.
+        if topic and (not topic_result or getattr(topic_result, "method", "none") == "none"):
+            update_adaptive_cache(topic, message_text, self.embeddings_provider)
         intent = classify_intent(message_text)
         response_contract = get_response_contract(intent)
 
@@ -1575,31 +1601,39 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
         return prompt
 
     def _generate_and_validate(self, session_id: str, session: Dict, astrologer_prompt: str,
-                                 dasha_timeline_str: str, evidence_vote, temperature: float = 0.6) -> str:
+                                 dasha_timeline_str: str, evidence_vote, temperature: float = 0.6,
+                                 query_mode: str = "personal") -> str:
         response_text = llm_service.generate(prompt=astrologer_prompt, temperature=temperature)
 
         recent_texts = self._get_recent_assistant_texts(session_id)
         similar_to = self._is_too_similar(response_text, recent_texts)
 
+        # In theoretical mode, skip personal chart claim & specificity checks so
+        # general astrology answers (e.g. "Saturn in the 7th house means...")
+        # are NOT rewritten into the user's own chart placements.
         verify_planets, verify_ascendant = [], None
-        cached_raw_for_verify = session.get("kundli_raw")
-        if cached_raw_for_verify:
-            try:
-                parsed_verify = json.loads(cached_raw_for_verify)
-                verify_planets = parsed_verify.get("planets", [])
-                verify_ascendant = parsed_verify.get("ascendant_sign")
-            except Exception:
-                pass
+        claim_failures = []
+        specificity_correction = None
 
-        claim_failures = validate_claims(
-            response_text, dasha_timeline_str, evidence_vote,
-            planets=verify_planets, ascendant_sign=verify_ascendant
-        )
+        if query_mode != "theoretical":
+            cached_raw_for_verify = session.get("kundli_raw")
+            if cached_raw_for_verify:
+                try:
+                    parsed_verify = json.loads(cached_raw_for_verify)
+                    verify_planets = parsed_verify.get("planets", [])
+                    verify_ascendant = parsed_verify.get("ascendant_sign")
+                except Exception:
+                    pass
 
-        specificity_score = compute_chart_specificity(response_text)
-        specificity_correction = build_specificity_correction(specificity_score)
-        if specificity_correction:
-            logger.info(f"[Specificity] response flagged as generic: ratio={specificity_score['specificity_ratio']}")
+            claim_failures = validate_claims(
+                response_text, dasha_timeline_str, evidence_vote,
+                planets=verify_planets, ascendant_sign=verify_ascendant
+            )
+
+            specificity_score = compute_chart_specificity(response_text)
+            specificity_correction = build_specificity_correction(specificity_score)
+            if specificity_correction:
+                logger.info(f"[Specificity] response flagged as generic: ratio={specificity_score['specificity_ratio']}")
 
         temporal_correction = self._check_past_date_claims(response_text)
         if temporal_correction:
@@ -1624,13 +1658,14 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
 
             response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
 
-            remaining_claims = validate_claims(
-                response_text, dasha_timeline_str, evidence_vote,
-                planets=verify_planets, ascendant_sign=verify_ascendant
-            )
+            if query_mode != "theoretical":
+                remaining_claims = validate_claims(
+                    response_text, dasha_timeline_str, evidence_vote,
+                    planets=verify_planets, ascendant_sign=verify_ascendant
+                )
+                if remaining_claims:
+                    logger.warning(f"Claim validation still found {len(remaining_claims)} issue(s) after regeneration")
             remaining_temporal = self._check_past_date_claims(response_text)
-            if remaining_claims:
-                logger.warning(f"Claim validation still found {len(remaining_claims)} issue(s) after regeneration")
             if remaining_temporal:
                 logger.warning("Temporal check still found a past-as-upcoming date after regeneration")
 
@@ -1714,6 +1749,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 response_text = self._generate_and_validate(
                     session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"],
                     temperature=gen_temp,
+                    query_mode=ctx.get("query_mode", "personal"),
                 )
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
@@ -1841,6 +1877,7 @@ Respond with ONLY valid JSON in this exact shape, no markdown, no extra text:
                 full_text = self._generate_and_validate(
                     session_id, session, astrologer_prompt, ctx["dasha_timeline_str"], ctx["evidence_vote"],
                     temperature=gen_temp,
+                    query_mode=ctx.get("query_mode", "personal"),
                 )
             except Exception as gen_err:
                 logger.error(f"Streaming generation failed: {gen_err}")
